@@ -118,7 +118,7 @@ def _(pl, seasonal):
 
 
 @app.cell
-def _(dt, last_five_years, pl, plt, regression_info, season, seasonal):
+def _(dt, last_five_years, pl, plt, regression_info, seasonal):
     season_colors = {
         "winter": "tab:blue",
         "summer": "gold",
@@ -151,9 +151,9 @@ def _(dt, last_five_years, pl, plt, regression_info, season, seasonal):
         season_data = seasonal.filter(pl.col("season") == _season)
         years = season_data.get_column("season_year").to_list()
         values = season_data.get_column("avg_actual").to_list()
-        for month, year_offset in representative_months[_season]:
+        for _month, year_offset in representative_months[_season]:
             ax.scatter(
-                [dt.date(year + year_offset, month, 1) for year in years],
+                [dt.date(year + year_offset, _month, 1) for year in years],
                 values,
                 label=f"{_season.replace('_', '/').title()} avg",
                 color=color,
@@ -166,9 +166,9 @@ def _(dt, last_five_years, pl, plt, regression_info, season, seasonal):
         if years:
             line_x = [min(years), max(years)]
             line_y = [_slope * x + _intercept for x in line_x]
-            for month, year_offset in representative_months[_season]:
+            for _month, year_offset in representative_months[_season]:
                 ax.plot(
-                    [dt.date(year + year_offset, month, 1) for year in line_x],
+                    [dt.date(year + year_offset, _month, 1) for year in line_x],
                     line_y,
                     linestyle="--",
                     color=color,
@@ -210,7 +210,7 @@ def _(regression_info):
         predictions_2026.append((season, slope * season_year + intercept))
     for season, value in predictions_2026:
         print(f"{season}: {value:.2f} gCO₂/kWh")
-    return (season,)
+    return
 
 
 @app.cell
