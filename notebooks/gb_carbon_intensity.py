@@ -142,29 +142,39 @@ def _(dt, last_five_years, pl, plt, regression_info, season, seasonal):
     fig, ax = plt.subplots(figsize=(10, 5))
     ax.bar(month_list, values, color=colors, width=10, label="Monthly average")
 
+    representative_months = {
+        "winter": [(1, 1)],
+        "summer": [(7, 0)],
+        "spring_autumn": [(4, 0), (10, 0)],
+    }
     for _season, color in season_colors.items():
         season_data = seasonal.filter(pl.col("season") == _season)
         years = season_data.get_column("season_year").to_list()
         values = season_data.get_column("avg_actual").to_list()
-        ax.scatter(
-            [dt.date(year, 7, 1) for year in years],
-            values,
-            label=f"{_season.replace('_', '/').title()} avg",
-            color=color,
-        )
-        _slope = regression_info[season]["slope"]
-        _intercept = regression_info[season]["intercept"]
+        for month, year_offset in representative_months[_season]:
+            ax.scatter(
+                [dt.date(year + year_offset, month, 1) for year in years],
+                values,
+                label=f"{_season.replace('_', '/').title()} avg",
+                color=color,
+                edgecolors="black",
+                linewidths=0.8,
+                zorder=3,
+            )
+        _slope = regression_info[_season]["slope"]
+        _intercept = regression_info[_season]["intercept"]
         if years:
             line_x = [min(years), max(years)]
             line_y = [_slope * x + _intercept for x in line_x]
-            ax.plot(
-                [dt.date(year, 7, 1) for year in line_x],
-                line_y,
-                linestyle="--",
-                color=color,
-                alpha=0.7,
-                label=f"{season.replace('_', '/').title()} trend",
-            )
+            for month, year_offset in representative_months[_season]:
+                ax.plot(
+                    [dt.date(year + year_offset, month, 1) for year in line_x],
+                    line_y,
+                    linestyle="--",
+                    color=color,
+                    alpha=0.7,
+                    label=f"{_season.replace('_', '/').title()} trend",
+                )
 
     ax.set_title("GB grid carbon intensity monthly averages")
     ax.set_xlabel("Date")
