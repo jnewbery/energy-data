@@ -1,10 +1,4 @@
-import datetime as dt
-from pathlib import Path
-
 import marimo
-import matplotlib.pyplot as plt
-import polars as pl
-import requests
 
 __generated_with = "0.19.4"
 app = marimo.App(width="medium")
@@ -12,6 +6,16 @@ app = marimo.App(width="medium")
 
 @app.cell
 def _():
+    import datetime as dt
+
+    from pathlib import Path
+    import polars as pl
+    import matplotlib.pyplot as plt
+    return Path, dt, pl, plt
+
+
+@app.cell
+def _(Path, requests):
     data_dir = Path("data")
     data_dir.mkdir(parents=True, exist_ok=True)
     csv_path = data_dir / "gb_carbon_intensity.csv"
@@ -24,11 +28,11 @@ def _():
         response = requests.get(source_url, timeout=30)
         response.raise_for_status()
         csv_path.write_bytes(response.content)
-    return csv_path, source_url
+    return (csv_path,)
 
 
 @app.cell
-def _(csv_path):
+def _(csv_path, pl):
     raw = pl.read_csv(csv_path)
     cleaned = (
         raw.with_columns(
@@ -45,19 +49,19 @@ def _(csv_path):
         .agg(pl.col("actual").mean().alias("avg_actual"))
         .sort("month")
     )
-    return cleaned, monthly_avg, raw
+    return (monthly_avg,)
 
 
 @app.cell
-def _(monthly_avg):
+def _(monthly_avg, pl):
     max_month = monthly_avg.select(pl.col("month").max()).item()
     start_month = max_month.replace(year=max_month.year - 5)
     last_five_years = monthly_avg.filter(pl.col("month") >= start_month)
-    return last_five_years, max_month, start_month
+    return (last_five_years,)
 
 
 @app.cell
-def _(last_five_years):
+def _(last_five_years, pl):
     seasonal = (
         last_five_years.with_columns(
             pl.col("month").dt.month().alias("month_num"),
@@ -81,11 +85,11 @@ def _(last_five_years):
         .agg(pl.col("avg_actual").mean().alias("avg_actual"))
         .sort(["season", "season_year"])
     )
-    return seasonal
+    return (seasonal,)
 
 
 @app.cell
-def _(seasonal):
+def _(pl, seasonal):
     def linear_regression(xs, ys):
         n = len(xs)
         if n < 2:
@@ -99,22 +103,22 @@ def _(seasonal):
         return slope, intercept
 
     regression_info = {}
-    for season in ["winter", "summer", "spring_autumn"]:
-        subset = seasonal.filter(pl.col("season") == season)
+    for _season in ["winter", "summer", "spring_autumn"]:
+        subset = seasonal.filter(pl.col("season") == _season)
         xs = subset.get_column("season_year").to_list()
         ys = subset.get_column("avg_actual").to_list()
-        slope, intercept = linear_regression(xs, ys)
-        regression_info[season] = {
+        _slope, _intercept = linear_regression(xs, ys)
+        regression_info[_season] = {
             "season_years": xs,
             "avg_actual": ys,
-            "slope": slope,
-            "intercept": intercept,
+            "slope": _slope,
+            "intercept": _intercept,
         }
-    return regression_info
+    return (regression_info,)
 
 
 @app.cell
-def _(last_five_years, regression_info, seasonal):
+def _(dt, last_five_years, pl, plt, regression_info, seasonal):
     fig, ax = plt.subplots(figsize=(10, 5))
     ax.plot(
         last_five_years.get_column("month").to_list(),
@@ -158,7 +162,8 @@ def _(last_five_years, regression_info, seasonal):
     ax.legend(loc="best", ncol=2)
     ax.grid(True, alpha=0.3)
     fig.autofmt_xdate()
-    return fig
+    fig
+    return
 
 
 @app.cell
