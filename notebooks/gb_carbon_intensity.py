@@ -118,52 +118,74 @@ def _(pl, seasonal):
 
 
 @app.cell
-def _(dt, last_five_years, pl, plt, regression_info, seasonal):
-    fig, ax = plt.subplots(figsize=(10, 5))
-    ax.plot(
-        last_five_years.get_column("month").to_list(),
-        last_five_years.get_column("avg_actual").to_list(),
-        label="Monthly average",
-        color="tab:blue",
-    )
-
+def _(last_five_years, pl, plt):
     season_colors = {
-        "winter": "tab:purple",
-        "summer": "tab:orange",
+        "winter": "tab:blue",
+        "summer": "gold",
         "spring_autumn": "tab:green",
     }
-    for season, color in season_colors.items():
-        season_data = seasonal.filter(pl.col("season") == season)
-        years = season_data.get_column("season_year").to_list()
-        values = season_data.get_column("avg_actual").to_list()
-        ax.scatter(
-            [dt.date(year, 7, 1) for year in years],
-            values,
-            label=f"{season.replace('_', '/').title()} avg",
-            color=color,
-        )
-        slope = regression_info[season]["slope"]
-        intercept = regression_info[season]["intercept"]
-        if years:
-            line_x = [min(years), max(years)]
-            line_y = [slope * x + intercept for x in line_x]
-            ax.plot(
-                [dt.date(year, 7, 1) for year in line_x],
-                line_y,
-                linestyle="--",
-                color=color,
-                alpha=0.7,
-                label=f"{season.replace('_', '/').title()} trend",
-            )
+    monthly_with_season = last_five_years.with_columns(
+        pl.when(pl.col("month").dt.month().is_in([12, 1, 2]))
+        .then(pl.lit("winter"))
+        .when(pl.col("month").dt.month().is_in([6, 7, 8]))
+        .then(pl.lit("summer"))
+        .otherwise(pl.lit("spring_autumn"))
+        .alias("season")
+    )
+    month_list = monthly_with_season.get_column("month").to_list()
+    values = monthly_with_season.get_column("avg_actual").to_list()
+    colors = [
+        season_colors[season]
+        for season in monthly_with_season.get_column("season").to_list()
+    ]
 
-    ax.set_title("GB grid carbon intensity averages")
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.bar(month_list, values, color=colors, label="Monthly average")
+    ax.set_title("GB grid carbon intensity monthly averages")
     ax.set_xlabel("Date")
     ax.set_ylabel("gCO₂/kWh")
-    ax.legend(loc="best", ncol=2)
-    ax.grid(True, alpha=0.3)
+    ax.grid(True, axis="y", alpha=0.3)
+    legend_handles = [
+        plt.Rectangle((0, 0), 1, 1, color=color)
+        for color in season_colors.values()
+    ]
+    ax.legend(
+        legend_handles,
+        ["Winter", "Summer", "Spring/Autumn"],
+        loc="best",
+        ncol=3,
+    )
     fig.autofmt_xdate()
     fig
     return
+
+
+@app.cell
+def _(regression_info):
+    month_season = {
+        1: "winter",
+        2: "winter",
+        3: "spring_autumn",
+        4: "spring_autumn",
+        5: "spring_autumn",
+        6: "summer",
+        7: "summer",
+        8: "summer",
+        9: "spring_autumn",
+        10: "spring_autumn",
+        11: "spring_autumn",
+        12: "winter",
+    }
+    predictions_2026 = []
+    for month in range(1, 13):
+        season = month_season[month]
+        season_year = 2026 if month == 12 else 2025 if month in (1, 2) else 2026
+        slope = regression_info[season]["slope"]
+        intercept = regression_info[season]["intercept"]
+        predictions_2026.append((month, slope * season_year + intercept))
+    for month, value in predictions_2026:
+        print(f"2026-{month:02d}: {value:.2f} gCO₂/kWh")
+    return (predictions_2026,)
 
 
 @app.cell
