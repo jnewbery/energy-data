@@ -53,10 +53,12 @@ def _(csv_path, pl):
 
 
 @app.cell
-def _(monthly_avg, pl):
-    max_month = monthly_avg.select(pl.col("month").max()).item()
-    start_month = max_month.replace(year=max_month.year - 5)
-    last_five_years = monthly_avg.filter(pl.col("month") >= start_month)
+def _(dt, monthly_avg, pl):
+    start_month = dt.datetime(2020, 12, 1)
+    end_month = dt.datetime(2025, 11, 1)
+    last_five_years = monthly_avg.filter(
+        (pl.col("month") >= start_month) & (pl.col("month") <= end_month)
+    )
     return (last_five_years,)
 
 
@@ -147,6 +149,11 @@ def _(dt, last_five_years, pl, plt, regression_info, seasonal):
         "summer": [(7, 0)],
         "spring_autumn": [(4, 0), (10, 0)],
     }
+    trend_month = {
+        "winter": (1, 1, 2025),
+        "summer": (7, 0, 2026),
+        "spring_autumn": (7, 0, 2026),
+    }
     for _season, color in season_colors.items():
         season_data = seasonal.filter(pl.col("season") == _season)
         years = season_data.get_column("season_year").to_list()
@@ -164,17 +171,30 @@ def _(dt, last_five_years, pl, plt, regression_info, seasonal):
         _slope = regression_info[_season]["slope"]
         _intercept = regression_info[_season]["intercept"]
         if years:
-            line_x = [min(years), max(years)]
+            line_end_year = trend_month[_season][2]
+            line_x = [min(years), line_end_year]
             line_y = [_slope * x + _intercept for x in line_x]
-            for _month, year_offset in representative_months[_season]:
-                ax.plot(
-                    [dt.date(year + year_offset, _month, 1) for year in line_x],
-                    line_y,
-                    linestyle="--",
-                    color=color,
-                    alpha=0.7,
-                    label=f"{_season.replace('_', '/').title()} trend",
-                )
+            _month, year_offset, _ = trend_month[_season]
+            end_date = dt.date(line_end_year + year_offset, _month, 1)
+            end_value = _slope * line_end_year + _intercept
+            ax.plot(
+                [dt.date(year + year_offset, _month, 1) for year in line_x],
+                line_y,
+                linestyle="--",
+                color=color,
+                alpha=0.7,
+                label=f"{_season.replace('_', '/').title()} trend",
+            )
+            ax.scatter(
+                [end_date],
+                [end_value],
+                marker="D",
+                facecolors="white",
+                edgecolors=color,
+                linewidths=1.2,
+                s=60,
+                zorder=4,
+            )
 
     ax.set_title("GB grid carbon intensity monthly averages")
     ax.set_xlabel("Date")
@@ -184,11 +204,39 @@ def _(dt, last_five_years, pl, plt, regression_info, seasonal):
         plt.Rectangle((0, 0), 1, 1, color=color)
         for color in season_colors.values()
     ]
-    ax.legend(
+    season_legend = ax.legend(
         legend_handles,
         ["Winter", "Summer", "Spring/Autumn"],
         loc="best",
         ncol=3,
+    )
+    marker_handles = [
+        plt.Line2D(
+            [0],
+            [0],
+            marker="o",
+            linestyle="none",
+            markerfacecolor="lightgray",
+            markeredgecolor="black",
+            markersize=8,
+        ),
+        plt.Line2D(
+            [0],
+            [0],
+            marker="D",
+            linestyle="none",
+            markerfacecolor="white",
+            markeredgecolor="black",
+            markersize=8,
+        ),
+    ]
+    marker_labels = ["Seasonal representative points", "Interpolated 2026 value"]
+    ax.add_artist(season_legend)
+    ax.legend(
+        marker_handles,
+        marker_labels,
+        loc="upper right",
+        bbox_to_anchor=(1.0, 0.88),
     )
     fig.autofmt_xdate()
     fig
@@ -199,7 +247,7 @@ def _(dt, last_five_years, pl, plt, regression_info, seasonal):
 def _(regression_info):
     season_month = {
         "winter": 1,
-        "spring_autumn": 4,
+        "spring_autumn": 7,
         "summer": 7,
     }
     predictions_2026 = []
