@@ -11,7 +11,7 @@ def _():
     from pathlib import Path
     import polars as pl
     import matplotlib.pyplot as plt
-    return Path, pl, plt
+    return Path, dt, pl, plt
 
 
 @app.cell
@@ -118,7 +118,7 @@ def _(pl, seasonal):
 
 
 @app.cell
-def _(last_five_years, pl, plt):
+def _(dt, last_five_years, pl, plt, regression_info, season, seasonal):
     season_colors = {
         "winter": "tab:blue",
         "summer": "gold",
@@ -140,7 +140,32 @@ def _(last_five_years, pl, plt):
     ]
 
     fig, ax = plt.subplots(figsize=(10, 5))
-    ax.bar(month_list, values, color=colors, width=20, label="Monthly average")
+    ax.bar(month_list, values, color=colors, width=10, label="Monthly average")
+
+    for _season, color in season_colors.items():
+        season_data = seasonal.filter(pl.col("season") == _season)
+        years = season_data.get_column("season_year").to_list()
+        values = season_data.get_column("avg_actual").to_list()
+        ax.scatter(
+            [dt.date(year, 7, 1) for year in years],
+            values,
+            label=f"{_season.replace('_', '/').title()} avg",
+            color=color,
+        )
+        _slope = regression_info[season]["slope"]
+        _intercept = regression_info[season]["intercept"]
+        if years:
+            line_x = [min(years), max(years)]
+            line_y = [_slope * x + _intercept for x in line_x]
+            ax.plot(
+                [dt.date(year, 7, 1) for year in line_x],
+                line_y,
+                linestyle="--",
+                color=color,
+                alpha=0.7,
+                label=f"{season.replace('_', '/').title()} trend",
+            )
+
     ax.set_title("GB grid carbon intensity monthly averages")
     ax.set_xlabel("Date")
     ax.set_ylabel("gCO₂/kWh")
@@ -162,30 +187,20 @@ def _(last_five_years, pl, plt):
 
 @app.cell
 def _(regression_info):
-    month_season = {
-        1: "winter",
-        2: "winter",
-        3: "spring_autumn",
-        4: "spring_autumn",
-        5: "spring_autumn",
-        6: "summer",
-        7: "summer",
-        8: "summer",
-        9: "spring_autumn",
-        10: "spring_autumn",
-        11: "spring_autumn",
-        12: "winter",
+    season_month = {
+        "winter": 1,
+        "spring_autumn": 4,
+        "summer": 7,
     }
     predictions_2026 = []
-    for month in range(1, 13):
-        season = month_season[month]
+    for season, month in season_month.items():
         season_year = 2026 if month == 12 else 2025 if month in (1, 2) else 2026
         slope = regression_info[season]["slope"]
         intercept = regression_info[season]["intercept"]
-        predictions_2026.append((month, slope * season_year + intercept))
-    for month, value in predictions_2026:
-        print(f"2026-{month:02d}: {value:.2f} gCO₂/kWh")
-    return
+        predictions_2026.append((season, slope * season_year + intercept))
+    for season, value in predictions_2026:
+        print(f"{season}: {value:.2f} gCO₂/kWh")
+    return (season,)
 
 
 @app.cell
