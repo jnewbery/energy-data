@@ -11,7 +11,7 @@ def _():
     from pathlib import Path
     import polars as pl
     import matplotlib.pyplot as plt
-    return Path, dt, pl, plt
+    return Path, pl, plt
 
 
 @app.cell
@@ -68,11 +68,11 @@ def _(last_five_years, pl):
             pl.col("month").dt.year().alias("year_num"),
         )
         .with_columns(
-            pl.when(pl.col("month_num").is_in([12, 1, 2]))
+            pl.when(pl.col("month_num").is_in([12, 1, 2]))  # Winter is December / January / February
             .then(pl.lit("winter"))
-            .when(pl.col("month_num").is_in([6, 7, 8]))
+            .when(pl.col("month_num").is_in([6, 7, 8]))  # Winter is June / July / August
             .then(pl.lit("summer"))
-            .otherwise(pl.lit("spring_autumn"))
+            .otherwise(pl.lit("spring_autumn"))  # Spring/Autumn is everything else
             .alias("season"),
             pl.when(pl.col("month_num").eq(12))
             .then(pl.col("year_num"))
@@ -140,7 +140,7 @@ def _(last_five_years, pl, plt):
     ]
 
     fig, ax = plt.subplots(figsize=(10, 5))
-    ax.bar(month_list, values, color=colors, label="Monthly average")
+    ax.bar(month_list, values, color=colors, width=20, label="Monthly average")
     ax.set_title("GB grid carbon intensity monthly averages")
     ax.set_xlabel("Date")
     ax.set_ylabel("gCO₂/kWh")
@@ -185,7 +185,7 @@ def _(regression_info):
         predictions_2026.append((month, slope * season_year + intercept))
     for month, value in predictions_2026:
         print(f"2026-{month:02d}: {value:.2f} gCO₂/kWh")
-    return (predictions_2026,)
+    return
 
 
 @app.cell
