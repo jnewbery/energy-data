@@ -27,20 +27,106 @@ def _(mo):
 @app.cell
 def _():
     from pathlib import Path
+    import datetime as dt
     import marimo as mo
     import pandas as pd
     import matplotlib.pyplot as plt
+    import requests
+    import shutil
+    from zipfile import ZipFile
 
     plt.style.use('seaborn-v0_8-whitegrid')
-    return Path, mo, pd, plt
+    return Path, dt, mo, pd, plt, requests, shutil, ZipFile
 
 
 @app.cell
-def _(Path, mo, pd):
-    # Fetch ABV_2024.zip from https://www.elexon.co.uk/open-data/ABV_2024.zip,
-    # unzip and then filter for rows where the BM Unit Id starts with
-    # 'T_DRAXX-'.
-    data_path = Path('data/ABV_2024_DRAX.csv')
+def _():
+    ABV_2024_URL = "https://www.elexon.co.uk/open-data/ABV_2024.zip"
+    return (ABV_2024_URL,)
+
+
+@app.cell
+def _(mo):
+    redownload_button = mo.ui.button(
+        value=0,
+        on_click=lambda value: value + 1,
+        label="Redownload ABV 2024 data",
+        kind="warn",
+    )
+    return (redownload_button,)
+
+
+@app.cell
+def _(ABV_2024_URL, Path, dt, mo, pd, redownload_button, requests, shutil, ZipFile):
+    data_dir = Path("data")
+    data_dir.mkdir(parents=True, exist_ok=True)
+    zip_path = data_dir / "ABV_2024.zip"
+    extract_dir = data_dir / "abv_2024"
+    data_path = data_dir / "ABV_2024_DRAX.csv"
+    data_ready = data_path.exists()
+
+    if bool(redownload_button.value):
+        response = requests.get(ABV_2024_URL, stream=True, timeout=60)
+        response.raise_for_status()
+        with zip_path.open("wb") as handle:
+            for chunk in response.iter_content(chunk_size=1024 * 1024):
+                if chunk:
+                    handle.write(chunk)
+
+        if extract_dir.exists():
+            shutil.rmtree(extract_dir)
+        extract_dir.mkdir(parents=True, exist_ok=True)
+        with ZipFile(zip_path) as archive:
+            archive.extractall(extract_dir)
+
+        if data_path.exists():
+            data_path.unlink()
+
+        monthly_files = sorted(extract_dir.glob("*.csv"))
+        header_written = False
+        for monthly_file in monthly_files:
+            for chunk in pd.read_csv(monthly_file, chunksize=200_000):
+                filtered = chunk[
+                    chunk["BM Unit Id"].astype(str).str.startswith("T_DRAXX", na=False)
+                ]
+                if filtered.empty:
+                    continue
+                filtered.to_csv(
+                    data_path,
+                    mode="a",
+                    index=False,
+                    header=not header_written,
+                )
+                header_written = True
+
+        data_ready = data_path.exists()
+
+    if data_ready:
+        last_updated_ts = dt.datetime.fromtimestamp(
+            data_path.stat().st_mtime,
+            tz=dt.timezone.utc,
+        ).strftime("%Y-%m-%d %H:%M:%S %Z")
+        update_msg = mo.md(
+            f"Last fetched `ABV_2024_DRAX.csv` at {last_updated_ts}"
+        )
+    else:
+        update_msg = mo.md(
+            "`ABV_2024_DRAX.csv` not downloaded yet. Click **Redownload ABV 2024 data** to fetch the latest dataset."
+        )
+
+    update_msg
+    return data_path, data_ready
+
+
+@app.cell
+def _(redownload_button):
+    redownload_button
+    return
+
+
+@app.cell
+def _(data_path, data_ready, mo, pd):
+    mo.stop(not data_ready)
 
     expected_columns = [
         'Data Flow ID','Flow Run Date','BM Unit Id','Settlement Date','Settlement Run Type',
