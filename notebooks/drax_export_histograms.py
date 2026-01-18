@@ -5,7 +5,7 @@ Description: Explore half-hourly exported energy distributions for DRAX BM units
 
 import marimo
 
-__generated_with = "0.17.7"
+__generated_with = "0.19.4"
 app = marimo.App(width="full")
 
 
@@ -88,8 +88,8 @@ def _(Path, mo, pd):
             f"BM Units: {', '.join(available_units)}",
         ]
     )
-    summary = mo.md("\n".join(f"- {line}" for line in summary_lines))
-    summary
+    _summary = mo.md("\n".join(f"- {line}" for line in summary_lines))
+    _summary
     return available_units, exports
 
 
@@ -123,12 +123,12 @@ def _(available_units, exports, plt):
         .reindex(units)
     )
     per_unit_summary['potential_mwh'] = per_unit_summary['intervals'] * 330
-    per_unit_summary['capacity_factor'] = per_unit_summary['total_export_mwh'] / per_unit_summary['potential_mwh']
+    per_unit_summary['capacity_factor'] = round(per_unit_summary['total_export_mwh'] / per_unit_summary['potential_mwh'], 2)
 
     combined_export = per_unit_summary['total_export_mwh'].sum()
     combined_potential = per_unit_summary['potential_mwh'].sum()
     combined_cf = combined_export / combined_potential if combined_potential else float('nan')
-    return fig, per_unit_summary, combined_cf, combined_export
+    return combined_cf, combined_export, fig, per_unit_summary
 
 
 @app.cell
@@ -136,14 +136,7 @@ def _(combined_cf, combined_export, fig, mo, per_unit_summary):
     per_unit_table = mo.ui.table(
         per_unit_summary.reset_index().rename(columns={'BM Unit Id': 'BM Unit'})
     )
-    combined_summary = mo.md(
-        "\n".join(
-            [
-                "Capacity factors (nameplate 330 MWh per half-hour):",
-                f"- Combined capacity factor: {combined_cf:.2%} ({combined_export:,.0f} MWh delivered)",
-            ]
-        )
-    )
+    combined_summary = mo.md(f"- Combined capacity factor: **{combined_cf:.2%}** ({combined_export:,.0f} MWh delivered)",)
     mo.vstack([fig, per_unit_table, combined_summary])
     return
 
@@ -196,16 +189,16 @@ def _(Path, exports, pd):
         'carbon_intensity_gco2_per_kwh',
         'weighted_carbon_component',
     ]
-    return carbon_export_df, matched, export_profile, preview_cols
+    return carbon_export_df, export_profile, matched, preview_cols
 
 
 @app.cell
-def _(matched, mo, preview_cols, carbon_export_df, export_profile):
+def _(carbon_export_df, export_profile, matched, mo, preview_cols):
     summary = mo.md(
         "\n".join(
             [
-                f"- Intervals with DRAX exports: {len(export_profile):,}",
-                f"- Intervals matched to carbon intensity data: {matched:,}",
+                f"- Intervals with DRAX exports: **{len(export_profile):,}**",
+                f"- Intervals matched to carbon intensity data: **{matched:,}**",
             ]
         )
     )
@@ -222,7 +215,7 @@ def _(carbon_export_df, mo):
 
     weighted_avg_carbon_intensity = _weighted_sum / total_export if total_export else float('nan')
     mo.md(
-        f"Energy-weighted average carbon intensity: {weighted_avg_carbon_intensity:.2f} gCO₂/kWh"
+        f"Energy-weighted average carbon intensity: **{weighted_avg_carbon_intensity:.2f} gCO₂/kWh**"
     )
     return
 
@@ -241,9 +234,9 @@ def _(Path, mo, pd):
     mo.md(
         "\n".join(
             [
-                "Grid weighted-average carbon intensity (2023-11-13 to 2024-11-12): "
-                f"{grid_weighted_avg_ci:.2f} gCO₂/kWh",
-                f"Half-hour intervals included: {len(period_df):,}",
+                "- Grid weighted-average carbon intensity (2023-11-13 to 2024-11-12): "
+                f"**{grid_weighted_avg_ci:.2f} gCO₂/kWh**\n",
+                f"- Half-hour intervals included: **{len(period_df):,}**",
             ]
         )
     )
