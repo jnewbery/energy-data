@@ -30,14 +30,13 @@ def _():
     import marimo as mo
     import pandas as pd
     import matplotlib.pyplot as plt
-    from IPython.display import display
 
     plt.style.use('seaborn-v0_8-whitegrid')
-    return Path, display, mo, pd, plt
+    return Path, mo, pd, plt
 
 
 @app.cell
-def _(Path, pd):
+def _(Path, mo, pd):
     # Fetch ABV_2024.zip from https://www.elexon.co.uk/open-data/ABV_2024.zip,
     # unzip and then filter for rows where the BM Unit Id starts with
     # 'T_DRAXX-'.
@@ -72,16 +71,25 @@ def _(Path, pd):
     ]
     available_units = [u for u in target_units if u in exports['BM Unit Id'].unique()]
     missing_units = sorted(set(target_units) - set(available_units))
+    summary_lines = []
     if missing_units:
-        print(f"Warning: missing BM Units in dataset: {', '.join(missing_units)}")
+        summary_lines.append(
+            f"**Warning:** missing BM Units in dataset: {', '.join(missing_units)}"
+        )
     if not available_units:
         raise ValueError('None of the requested BM Units are present in the dataset.')
 
     exports = exports[exports['BM Unit Id'].isin(available_units)].copy()
 
-    print(f'Total rows: {len(df):,}')
-    print(f'Export rows: {len(exports):,}')
-    print('BM Units:', ', '.join(available_units))
+    summary_lines.extend(
+        [
+            f"Total rows: {len(df):,}",
+            f"Export rows: {len(exports):,}",
+            f"BM Units: {', '.join(available_units)}",
+        ]
+    )
+    summary = mo.md("\n".join(f"- {line}" for line in summary_lines))
+    summary
     return available_units, exports
 
 
@@ -109,8 +117,6 @@ def _(available_units, exports, plt):
         extra_ax.set_visible(False)
 
     fig.suptitle('Distribution of Exported Energy by DRAX BM Unit (T_DRAXX-1 to T_DRAXX-4, 2024)', fontsize=18, y=1.01)
-    plt.show()
-
     per_unit_summary = (
         exports.groupby('BM Unit Id')['Meter Volume']
         .agg(total_export_mwh='sum', intervals='count')
@@ -119,25 +125,31 @@ def _(available_units, exports, plt):
     per_unit_summary['potential_mwh'] = per_unit_summary['intervals'] * 330
     per_unit_summary['capacity_factor'] = per_unit_summary['total_export_mwh'] / per_unit_summary['potential_mwh']
 
-    print('\nCapacity factors (nameplate 330 MWh per half-hour):')
-    for unit, row in per_unit_summary.iterrows():
-        cf = row['capacity_factor']
-        _total_export = row['total_export_mwh']
-        intervals = row['intervals']
-        print(
-            f"  {unit}: {cf:.2%} over {intervals:,} intervals "
-            f"({_total_export:,.0f} MWh delivered)"
-        )
-
     combined_export = per_unit_summary['total_export_mwh'].sum()
     combined_potential = per_unit_summary['potential_mwh'].sum()
     combined_cf = combined_export / combined_potential if combined_potential else float('nan')
-    print(f"\nCombined capacity factor: {combined_cf:.2%} ({combined_export:,.0f} MWh delivered)")
+    return fig, per_unit_summary, combined_cf, combined_export
+
+
+@app.cell
+def _(combined_cf, combined_export, fig, mo, per_unit_summary):
+    per_unit_table = mo.ui.table(
+        per_unit_summary.reset_index().rename(columns={'BM Unit Id': 'BM Unit'})
+    )
+    combined_summary = mo.md(
+        "\n".join(
+            [
+                "Capacity factors (nameplate 330 MWh per half-hour):",
+                f"- Combined capacity factor: {combined_cf:.2%} ({combined_export:,.0f} MWh delivered)",
+            ]
+        )
+    )
+    mo.vstack([fig, per_unit_table, combined_summary])
     return
 
 
 @app.cell
-def _(Path, display, exports, pd):
+def _(Path, exports, pd):
     exports_with_time = exports.copy()
     slot_offset_mins = (exports_with_time['Settlement Period'] - 1) * 30
     exports_with_time['interval_start'] = exports_with_time['Settlement Date'] + pd.to_timedelta(slot_offset_mins, unit='m')
@@ -178,31 +190,45 @@ def _(Path, display, exports, pd):
     )
 
     matched = carbon_export_df['carbon_intensity_gco2_per_kwh'].notna().sum()
-    print(f"Intervals with DRAX exports: {len(export_profile):,}")
-    print(f"Intervals matched to carbon intensity data: {matched:,}")
     preview_cols = [
         'interval_start',
         'total_export_mwh',
         'carbon_intensity_gco2_per_kwh',
         'weighted_carbon_component',
     ]
-    display(carbon_export_df[preview_cols])
-    return (carbon_export_df,)
+    return carbon_export_df, matched, export_profile, preview_cols
 
 
 @app.cell
-def _(carbon_export_df):
+def _(matched, mo, preview_cols, carbon_export_df, export_profile):
+    summary = mo.md(
+        "\n".join(
+            [
+                f"- Intervals with DRAX exports: {len(export_profile):,}",
+                f"- Intervals matched to carbon intensity data: {matched:,}",
+            ]
+        )
+    )
+    table = mo.ui.table(carbon_export_df[preview_cols])
+    mo.vstack([summary, table])
+    return
+
+
+@app.cell
+def _(carbon_export_df, mo):
     valid = carbon_export_df.dropna(subset=['carbon_intensity_gco2_per_kwh'])
     total_export = valid['total_export_mwh'].sum()
     _weighted_sum = valid['weighted_carbon_component'].sum()
 
     weighted_avg_carbon_intensity = _weighted_sum / total_export if total_export else float('nan')
-    print(f"Energy-weighted average carbon intensity: {weighted_avg_carbon_intensity:.2f} gCO₂/kWh")
+    mo.md(
+        f"Energy-weighted average carbon intensity: {weighted_avg_carbon_intensity:.2f} gCO₂/kWh"
+    )
     return
 
 
 @app.cell
-def _(Path, pd):
+def _(Path, mo, pd):
     ci_full = pd.read_csv(Path('data/df_fuel_ckan.csv'), parse_dates=['DATETIME'])
     period_mask = (ci_full['DATETIME'] >= '2023-11-13') & (ci_full['DATETIME'] <= '2024-11-12 23:30:00')
     period_df = ci_full.loc[period_mask].copy()
@@ -212,8 +238,15 @@ def _(Path, pd):
     total_generation = period_df['GENERATION'].sum()
     grid_weighted_avg_ci = _weighted_sum / total_generation if total_generation else float('nan')
 
-    print(f"Grid weighted-average carbon intensity (2023-11-13 to 2024-11-12): {grid_weighted_avg_ci:.2f} gCO₂/kWh")
-    print(f"Half-hour intervals included: {len(period_df):,}")
+    mo.md(
+        "\n".join(
+            [
+                "Grid weighted-average carbon intensity (2023-11-13 to 2024-11-12): "
+                f"{grid_weighted_avg_ci:.2f} gCO₂/kWh",
+                f"Half-hour intervals included: {len(period_df):,}",
+            ]
+        )
+    )
     return
 
 
