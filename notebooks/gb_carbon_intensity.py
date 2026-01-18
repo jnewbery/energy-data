@@ -1,3 +1,8 @@
+"""
+Title: GB Carbon Intensity
+Description: Track GB grid carbon intensity over time with monthly and seasonal averages.
+"""
+
 import marimo
 
 __generated_with = "0.19.4"
