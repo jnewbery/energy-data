@@ -55,14 +55,14 @@ def show_index(ast, mo, pathlib):
     table = "\n".join(
         [
             "| Report | Description |",
-            "| --- | --- |",
+            "|:--- |:--- |",
             table_rows,
         ]
     )
     mo.vstack([
         mo.md(
         """
-        # ⚡️ Energy Data Dashboard
+        # ⚡️ Energy Data Dashboards
         Select a report below to view the latest data.
 
         ---
