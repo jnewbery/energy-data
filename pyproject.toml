@@ -14,4 +14,5 @@ dependencies = [
     "pandas>=2.3.3",  # For drax_export_histograms.py - to remove
 ]
 [tool.poe.tasks]
-notebook = "marimo edit notebooks"
+edit = "marimo edit notebooks"
+run = "server.py"
