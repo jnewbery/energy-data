@@ -11,7 +11,8 @@ dependencies = [
     "poethepoet>=0.38.0",
     "polars>=1.37.1",
     "jupyter>=1.1.1",  # For drax_export_histograms.py - to remove
-    "pandas>=2.3.3",  # For drax_export_histograms.py - to remove
+    "pandas>=2.3.3",
+    "playwright>=1.57.0",
 ]
 [tool.poe.tasks]
 edit = "marimo edit notebooks"

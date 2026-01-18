@@ -15,11 +15,6 @@ def _(mo):
     # DRAX BM Unit Export Histograms
 
     Visualize half-hourly exported energy for each DRAX BM Unit in `ABV_2024_DRAX.csv`.
-
-    Steps:
-    1. Load the Aggregated BM Unit (ABV) data from Elexon.
-    2. Keep only export (`Import/Export Indicator == 'E'`) rows and clean the numeric columns.
-    3. Plot a histogram for each BM Unit to show the spread of exported energy values across the year.
     """)
     return
 
@@ -31,12 +26,27 @@ def _():
     import marimo as mo
     import pandas as pd
     import matplotlib.pyplot as plt
-    import requests
     import shutil
     from zipfile import ZipFile
+    from playwright.async_api import async_playwright
+    import time
+    import sys
+    import subprocess
+    import asyncio
 
     plt.style.use('seaborn-v0_8-whitegrid')
-    return Path, dt, mo, pd, plt, requests, shutil, ZipFile
+    return (
+        Path,
+        ZipFile,
+        async_playwright,
+        dt,
+        mo,
+        pd,
+        plt,
+        shutil,
+        subprocess,
+        sys,
+    )
 
 
 @app.cell
@@ -46,18 +56,101 @@ def _():
 
 
 @app.cell
+def _(subprocess, sys):
+    # Check if we can find the browser executable
+    # If not, we install it programmatically
+    # "chromium" is usually sufficient for standard scraping
+    print("Checking Playwright browser installation...")
+
+    try:
+        # We run the install command. Playwright is smart enough 
+        # to skip the download if it's already cached.
+        subprocess.run(
+            [sys.executable, "-m", "playwright", "install", "chromium"], 
+            check=True, 
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE
+        )
+        print("✅ Playwright browsers are installed and ready.")
+    except subprocess.CalledProcessError as e:
+        print(f"❌ Failed to install browsers: {e}")
+    return
+
+
+@app.cell
 def _(mo):
     redownload_button = mo.ui.button(
         value=0,
         on_click=lambda value: value + 1,
-        label="Redownload ABV 2024 data",
+        label="Redownload ABV 2024 data (may take a minute - Elexon website is slow)",
         kind="warn",
     )
     return (redownload_button,)
 
 
 @app.cell
-def _(ABV_2024_URL, Path, dt, mo, pd, redownload_button, requests, shutil, ZipFile):
+def _(async_playwright):
+    async def get_elexon_data(url, output_filename):
+        async with async_playwright() as p:
+            # 1. Launch browser (stealth mode)
+            browser = await p.chromium.launch(
+                headless=True,
+                args=["--disable-blink-features=AutomationControlled"]
+            )
+            context = await browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                accept_downloads=True
+            )
+            page = await context.new_page()
+
+            # 2. Warm-up: Visit homepage to clear Cloudflare challenges
+            print("🛡️  Step 1: Visiting homepage...")
+            await page.goto("https://www.elexon.co.uk/bsc/data/open-settlement-data/")
+            try:
+                # Wait for the challenge to pass (waiting for the logo or main text)
+                await page.wait_for_selector("text=Elexon", timeout=60000)
+            except:
+                pass
+
+            # 3. Download the file
+            print(f"⬇️  Step 2: Downloading {output_filename}...")
+
+            try:
+                async with page.expect_download(timeout=60000) as download_info:
+                    try:
+                        # This triggers the download, but will throw an error 
+                        # because the browser doesn't "navigate" to a new page.
+                        await page.goto(url)
+                    except Exception as e:
+                        # If the error is just telling us a download started, we ignore it.
+                        if "Download is starting" not in str(e):
+                            raise e
+
+                # Get the download object and save it
+                download = await download_info.value
+                await download.save_as(output_filename)
+                print(f"🎉 Success! Saved to: {output_filename}")
+
+            except Exception as e:
+                print(f"❌ Download failed: {e}")
+                raise e
+            finally:
+                await browser.close()
+    return (get_elexon_data,)
+
+
+@app.cell
+async def _(
+    ABV_2024_URL,
+    Path,
+    ZipFile,
+    dt,
+    get_elexon_data,
+    mo,
+    pd,
+    redownload_button,
+    shutil,
+):
     data_dir = Path("data")
     data_dir.mkdir(parents=True, exist_ok=True)
     zip_path = data_dir / "ABV_2024.zip"
@@ -66,12 +159,7 @@ def _(ABV_2024_URL, Path, dt, mo, pd, redownload_button, requests, shutil, ZipFi
     data_ready = data_path.exists()
 
     if bool(redownload_button.value):
-        response = requests.get(ABV_2024_URL, stream=True, timeout=60)
-        response.raise_for_status()
-        with zip_path.open("wb") as handle:
-            for chunk in response.iter_content(chunk_size=1024 * 1024):
-                if chunk:
-                    handle.write(chunk)
+        await get_elexon_data(ABV_2024_URL, zip_path)
 
         if extract_dir.exists():
             shutil.rmtree(extract_dir)
@@ -114,7 +202,12 @@ def _(ABV_2024_URL, Path, dt, mo, pd, redownload_button, requests, shutil, ZipFi
             "`ABV_2024_DRAX.csv` not downloaded yet. Click **Redownload ABV 2024 data** to fetch the latest dataset."
         )
 
-    update_msg
+    mo.vstack(
+        [
+            mo.md("## Download Status"),
+            update_msg,
+        ]
+    )
     return data_path, data_ready
 
 
@@ -175,7 +268,7 @@ def _(data_path, data_ready, mo, pd):
         ]
     )
     _summary = mo.md("\n".join(f"- {line}" for line in summary_lines))
-    _summary
+    mo.vstack([mo.md("## Data Analysis"), _summary])
     return available_units, exports
 
 
@@ -307,7 +400,8 @@ def _(carbon_export_df, mo):
 
 
 @app.cell
-def _(Path, mo, pd):
+def _(Path, data_ready, mo, pd):
+    mo.stop(not data_ready)
     ci_full = pd.read_csv(Path('data/df_fuel_ckan.csv'), parse_dates=['DATETIME'])
     period_mask = (ci_full['DATETIME'] >= '2023-11-13') & (ci_full['DATETIME'] <= '2024-11-12 23:30:00')
     period_df = ci_full.loc[period_mask].copy()
