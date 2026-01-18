@@ -302,7 +302,7 @@ def _(dt, last_five_years, pl, plt, regression_info, seasonal):
 
 
 @app.cell
-def _(regression_info):
+def _(mo, regression_info):
     season_month = {
         "winter": 1,
         "spring_autumn": 7,
@@ -313,9 +313,14 @@ def _(regression_info):
         season_year = 2026 if month == 12 else 2025 if month in (1, 2) else 2026
         slope = regression_info[season]["slope"]
         intercept = regression_info[season]["intercept"]
-        predictions_2026.append((season, slope * season_year + intercept))
-    for season, value in predictions_2026:
-        print(f"{season}: {value:.2f} gCO₂/kWh")
+        predictions_2026.append(
+            {
+                "Season": season.replace("_", "/").title(),
+                "Predicted 2026 gCO₂/kWh": round(slope * season_year + intercept, 2),
+            }
+        )
+    predictions_table = mo.ui.table(predictions_2026)
+    predictions_table
     return
 
 
