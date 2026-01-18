@@ -5,23 +5,6 @@ app = marimo.App(width="medium")
 
 
 @app.cell
-def _(last_updated, mo, redownload_button):
-    mo.vstack(
-        [
-            mo.md(
-                f"""
-                # GB Carbon Intensity
-
-                **Last updated:** {last_updated}
-                """
-            ),
-            redownload_button,
-        ]
-    )
-    return
-
-
-@app.cell
 def _():
     import datetime as dt
     from pathlib import Path
@@ -29,48 +12,75 @@ def _():
     import polars as pl
     import matplotlib.pyplot as plt
     import requests
+    return Path, dt, mo, pl, plt, requests
 
-    source_url = (
+
+@app.cell
+def _(mo):
+    mo.md("""
+    ## GB Carbon Intensity
+    """)
+    return
+
+
+@app.cell
+def _():
+    CARBON_INTENSITY_URL = (
         "https://api.neso.energy/dataset/f406810a-1a36-48d2-b542-1dfb1348096e/"
         "resource/0e5fde43-2de7-4fb4-833d-c7bca3b658b0/download/"
         "gb_carbon_intensity.csv"
     )
+    return (CARBON_INTENSITY_URL,)
 
+
+@app.cell
+def _(mo):
+    # This button can't be defined in the same cell that its value is read
     redownload_button = mo.ui.button(
         value=0,
         on_click=lambda value: value + 1,
         label="Redownload data",
         kind="warn",
     )
-    return Path, dt, mo, pl, plt, redownload_button, requests, source_url
+    return (redownload_button,)
 
 
 @app.cell
-def _(Path, dt, mo, redownload_button, requests, source_url):
+def _(CARBON_INTENSITY_URL, Path, dt, mo, redownload_button, requests):
     data_dir = Path("data")
     data_dir.mkdir(parents=True, exist_ok=True)
     csv_path = data_dir / "gb_carbon_intensity.csv"
-    should_redownload = bool(redownload_button.value)
     data_ready = csv_path.exists()
-    if should_redownload or not data_ready:
-        if should_redownload:
-            response = requests.get(source_url, timeout=30)
-            response.raise_for_status()
-            csv_path.write_bytes(response.content)
-            data_ready = True
-        else:
-            mo.md(
-                "⚠️ **Data missing.** Click **Redownload data** to fetch "
-                "the latest dataset."
-            )
+
+    if bool(redownload_button.value):
+        response = requests.get(CARBON_INTENSITY_URL, timeout=30)
+        response.raise_for_status()
+        csv_path.write_bytes(response.content)
+        data_ready = True
+
     if data_ready:
-        last_updated = dt.datetime.fromtimestamp(
+        last_updated_ts = dt.datetime.fromtimestamp(
             csv_path.stat().st_mtime,
             tz=dt.timezone.utc,
         ).strftime("%Y-%m-%d %H:%M:%S %Z")
+        update_msg = mo.md(f"Last fetched `gb_carbon_intensity.csv` at {last_updated_ts}")
     else:
-        last_updated = "Not downloaded yet."
-    return csv_path, data_ready, last_updated
+        update_msg = mo.md("`gb_carbon_intensity.csv` not downloaded yet. Click **Redownload data** to fetch the latest dataset.")
+
+    update_msg
+    return csv_path, data_ready
+
+
+@app.cell
+def _(redownload_button):
+    redownload_button
+    #mo.vstack(
+    #   [
+    #        mo.md(f"{last_updated}"),
+    #        redownload_button,
+    #    ]
+    #)
+    return
 
 
 @app.cell
@@ -301,18 +311,6 @@ def _(regression_info):
         predictions_2026.append((season, slope * season_year + intercept))
     for season, value in predictions_2026:
         print(f"{season}: {value:.2f} gCO₂/kWh")
-    return
-
-
-@app.cell
-def _(monthly_avg):
-    monthly_avg
-    return
-
-
-@app.cell
-def _(seasonal):
-    seasonal
     return
 
 
