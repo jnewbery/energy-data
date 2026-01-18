@@ -1,3 +1,8 @@
+"""
+Title: DRAX BM Unit Export Histograms
+Description: Explore half-hourly exported energy distributions for DRAX BM units.
+"""
+
 import marimo
 
 __generated_with = "0.17.7"
