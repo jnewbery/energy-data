@@ -5,38 +5,7 @@ app = marimo.App(width="medium")
 
 
 @app.cell
-def _():
-    import datetime as dt
-    from pathlib import Path
-    import marimo as mo
-    import polars as pl
-    import matplotlib.pyplot as plt
-    import requests
-
-    data_dir = Path("data")
-    data_dir.mkdir(parents=True, exist_ok=True)
-    csv_path = data_dir / "gb_carbon_intensity.csv"
-    source_url = (
-        "https://api.neso.energy/dataset/f406810a-1a36-48d2-b542-1dfb1348096e/"
-        "resource/0e5fde43-2de7-4fb4-833d-c7bca3b658b0/download/"
-        "gb_carbon_intensity.csv"
-    )
-
-    redownload_button = mo.ui.button(
-        value=0,
-        on_click=lambda value: value + 1,
-        label="Redownload data",
-        kind="warn",
-    )
-
-    if csv_path.exists():
-        last_updated = dt.datetime.fromtimestamp(
-            csv_path.stat().st_mtime,
-            tz=dt.timezone.utc,
-        ).strftime("%Y-%m-%d %H:%M:%S %Z")
-    else:
-        last_updated = "Not downloaded yet."
-
+def _(last_updated, mo, redownload_button):
     mo.vstack(
         [
             mo.md(
@@ -49,29 +18,64 @@ def _():
             redownload_button,
         ]
     )
-    return Path, csv_path, dt, mo, pl, plt, redownload_button, requests, source_url
+    return
 
 
 @app.cell
-def _(csv_path, mo, redownload_button, requests, source_url):
+def _():
+    import datetime as dt
+    from pathlib import Path
+    import marimo as mo
+    import polars as pl
+    import matplotlib.pyplot as plt
+    import requests
+
+    source_url = (
+        "https://api.neso.energy/dataset/f406810a-1a36-48d2-b542-1dfb1348096e/"
+        "resource/0e5fde43-2de7-4fb4-833d-c7bca3b658b0/download/"
+        "gb_carbon_intensity.csv"
+    )
+
+    redownload_button = mo.ui.button(
+        value=0,
+        on_click=lambda value: value + 1,
+        label="Redownload data",
+        kind="warn",
+    )
+    return Path, dt, mo, pl, plt, redownload_button, requests, source_url
+
+
+@app.cell
+def _(Path, dt, mo, redownload_button, requests, source_url):
+    data_dir = Path("data")
+    data_dir.mkdir(parents=True, exist_ok=True)
+    csv_path = data_dir / "gb_carbon_intensity.csv"
     should_redownload = bool(redownload_button.value)
-    if not csv_path.exists() and not should_redownload:
-        mo.stop(
-            True,
+    data_ready = csv_path.exists()
+    if should_redownload or not data_ready:
+        if should_redownload:
+            response = requests.get(source_url, timeout=30)
+            response.raise_for_status()
+            csv_path.write_bytes(response.content)
+            data_ready = True
+        else:
             mo.md(
                 "⚠️ **Data missing.** Click **Redownload data** to fetch "
                 "the latest dataset."
-            ),
-        )
-    if should_redownload or not csv_path.exists():
-        response = requests.get(source_url, timeout=30)
-        response.raise_for_status()
-        csv_path.write_bytes(response.content)
-    return (csv_path,)
+            )
+    if data_ready:
+        last_updated = dt.datetime.fromtimestamp(
+            csv_path.stat().st_mtime,
+            tz=dt.timezone.utc,
+        ).strftime("%Y-%m-%d %H:%M:%S %Z")
+    else:
+        last_updated = "Not downloaded yet."
+    return csv_path, data_ready, last_updated
 
 
 @app.cell
-def _(csv_path, pl):
+def _(csv_path, data_ready, mo, pl):
+    mo.stop(not data_ready)
     raw = pl.read_csv(csv_path)
     cleaned = (
         raw.with_columns(
