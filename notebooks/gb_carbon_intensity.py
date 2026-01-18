@@ -7,15 +7,12 @@ app = marimo.App(width="medium")
 @app.cell
 def _():
     import datetime as dt
-
     from pathlib import Path
+    import marimo as mo
     import polars as pl
     import matplotlib.pyplot as plt
-    return Path, dt, pl, plt
+    import requests
 
-
-@app.cell
-def _(Path, requests):
     data_dir = Path("data")
     data_dir.mkdir(parents=True, exist_ok=True)
     csv_path = data_dir / "gb_carbon_intensity.csv"
@@ -24,7 +21,49 @@ def _(Path, requests):
         "resource/0e5fde43-2de7-4fb4-833d-c7bca3b658b0/download/"
         "gb_carbon_intensity.csv"
     )
-    if not csv_path.exists():
+
+    redownload_button = mo.ui.button(
+        value=0,
+        on_click=lambda value: value + 1,
+        label="Redownload data",
+        kind="warn",
+    )
+
+    if csv_path.exists():
+        last_updated = dt.datetime.fromtimestamp(
+            csv_path.stat().st_mtime,
+            tz=dt.timezone.utc,
+        ).strftime("%Y-%m-%d %H:%M:%S %Z")
+    else:
+        last_updated = "Not downloaded yet."
+
+    mo.vstack(
+        [
+            mo.md(
+                f"""
+                # GB Carbon Intensity
+
+                **Last updated:** {last_updated}
+                """
+            ),
+            redownload_button,
+        ]
+    )
+    return Path, csv_path, dt, mo, pl, plt, redownload_button, requests, source_url
+
+
+@app.cell
+def _(csv_path, mo, redownload_button, requests, source_url):
+    should_redownload = bool(redownload_button.value)
+    if not csv_path.exists() and not should_redownload:
+        mo.stop(
+            True,
+            mo.md(
+                "⚠️ **Data missing.** Click **Redownload data** to fetch "
+                "the latest dataset."
+            ),
+        )
+    if should_redownload or not csv_path.exists():
         response = requests.get(source_url, timeout=30)
         response.raise_for_status()
         csv_path.write_bytes(response.content)
