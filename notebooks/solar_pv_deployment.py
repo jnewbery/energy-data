@@ -16,10 +16,10 @@ def _():
     import re
 
     import marimo as mo
-    import matplotlib.pyplot as plt
     import pandas as pd
+    import plotly.graph_objects as go
     import requests
-    return Path, dt, mo, pd, plt, re, requests
+    return Path, dt, go, mo, pd, re, requests
 
 
 @app.cell
@@ -303,7 +303,7 @@ def _(capacity_sheet, capacity_table, mo):
 
 
 @app.cell
-def _(capacity_table, pd, plt, re):
+def _(capacity_table, pd, re):
     def classify_band(label: str) -> str:
         lower = str(label).lower()
         if "mw" in lower:
@@ -313,7 +313,23 @@ def _(capacity_table, pd, plt, re):
             return "large"
         return "small" if max(values) <= 10 and "kw" in lower else "large"
 
-    def stacked_area(plot_df: pd.DataFrame, title: str):
+    capacity_plot = capacity_table.copy()
+    capacity_plot = capacity_plot.sort_values("month")
+    capacity_plot["size_class"] = capacity_plot["capacity_band"].apply(classify_band)
+    return capacity_plot
+
+
+@app.cell
+def _(mo):
+    show_small = mo.ui.checkbox(value=True, label="Show small (<10 kW)")
+    show_large = mo.ui.checkbox(value=True, label="Show large (≥10 kW)")
+    mo.hstack([show_small, show_large])
+    return show_large, show_small
+
+
+@app.cell
+def _(capacity_plot, go, mo, pd, show_large, show_small):
+    def stacked_area(plot_df: pd.DataFrame, title: str) -> go.Figure:
         pivot = (
             plot_df.pivot_table(
                 index="month",
@@ -325,39 +341,61 @@ def _(capacity_table, pd, plt, re):
             .fillna(0)
         )
         cumulative = pivot.cumsum()
-        fig, ax = plt.subplots(figsize=(10, 6))
-        ax.stackplot(
-            cumulative.index,
-            [cumulative[col].values for col in cumulative.columns],
-            labels=[str(col) for col in cumulative.columns],
+        annual = (
+            plot_df.assign(year=plot_df["month"].dt.year)
+            .groupby(["capacity_band", "year"], as_index=False)["deployments"]
+            .sum()
+            .rename(columns={"deployments": "annual_deployments"})
         )
-        ax.set_title(title)
-        ax.set_xlabel("Month")
-        ax.set_ylabel("Total installations")
-        ax.legend(title="Capacity band", bbox_to_anchor=(1.05, 1), loc="upper left")
-        ax.grid(True, alpha=0.3)
-        fig.tight_layout()
+        cumulative_long = (
+            cumulative.reset_index()
+            .melt(id_vars="month", var_name="capacity_band", value_name="cumulative")
+            .assign(year=lambda df: df["month"].dt.year)
+            .merge(annual, on=["capacity_band", "year"], how="left")
+        )
+
+        fig = go.Figure()
+        for band in cumulative.columns:
+            band_data = cumulative_long[cumulative_long["capacity_band"] == band]
+            fig.add_trace(
+                go.Scatter(
+                    x=band_data["month"],
+                    y=band_data["cumulative"],
+                    mode="lines",
+                    stackgroup="one",
+                    name=str(band),
+                    customdata=band_data["annual_deployments"],
+                    hovertemplate=(
+                        "Month: %{x|%b %Y}<br>"
+                        "Cumulative: %{y:,.0f}<br>"
+                        "Annual deployments: %{customdata:,.0f}"
+                        "<extra></extra>"
+                    ),
+                )
+            )
+
+        fig.update_layout(
+            title=title,
+            xaxis_title="Month",
+            yaxis_title="Total installations",
+            legend_title="Capacity band",
+            hovermode="x unified",
+        )
         return fig
 
-    capacity_plot = capacity_table.copy()
-    capacity_plot = capacity_plot.sort_values("month")
-    capacity_plot["size_class"] = capacity_plot["capacity_band"].apply(classify_band)
+    selected_classes = []
+    if show_small.value:
+        selected_classes.append("small")
+    if show_large.value:
+        selected_classes.append("large")
 
-    _fig_small = stacked_area(
-        capacity_plot[capacity_plot["size_class"] == "small"],
-        "Total installed solar PV (small <10 kW installations)",
-    )
-    _fig_large = stacked_area(
-        capacity_plot[capacity_plot["size_class"] == "large"],
-        "Total installed solar PV (large ≥10 kW installations)",
-    )
-    _fig_total = stacked_area(
-        capacity_plot,
-        "Total installed solar PV (all capacity bands)",
-    )
-    _fig_small
-    _fig_large
-    _fig_total
+    if not selected_classes:
+        mo.md("Select at least one size class to display the chart.")
+        return
+
+    filtered = capacity_plot[capacity_plot["size_class"].isin(selected_classes)]
+    title = "Total installed solar PV (" + ", ".join(selected_classes) + " capacity bands)"
+    stacked_area(filtered, title)
     return
 
 
