@@ -4,5 +4,5 @@
 # Except this .gitignore file
 !.gitignore
 
-# Include sample file
-!sample_gb_carbon_intensity.csv
+# Include sample files
+!sample*
