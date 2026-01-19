@@ -24,15 +24,13 @@ def _():
 
 @app.cell
 def _(mo):
-    mo.md(
-        """
-        ## UK solar PV deployment
+    mo.md("""
+    ## UK solar PV deployment
 
-        This notebook downloads the latest monthly solar PV deployment dataset from GOV.UK
-        and charts the number of installations since 2010, split by capacity band and
-        accreditation type.
-        """
-    )
+    This notebook downloads the latest monthly solar PV deployment dataset from GOV.UK
+    and charts the number of installations since 2010, split by capacity band and
+    accreditation type.
+    """)
     return
 
 
@@ -61,13 +59,13 @@ def _(GOV_UK_PAGE, dt, mo, re, requests):
     }
 
     try:
-        response = requests.get(GOV_UK_PAGE, timeout=30)
-        response.raise_for_status()
+        _response = requests.get(GOV_UK_PAGE, timeout=30)
+        _response.raise_for_status()
     except requests.RequestException as exc:
         mo.md(f"Unable to reach GOV.UK for the dataset list: {exc}")
         mo.stop(True)
 
-    links = sorted(set(ods_link_pattern.findall(response.text)))
+    links = sorted(set(ods_link_pattern.findall(_response.text)))
     filtered_links = [
         link
         for link in links
@@ -97,7 +95,7 @@ def _(GOV_UK_PAGE, dt, mo, re, requests):
     mo.md(
         f"Latest dataset discovered: [{latest_dataset_label}]({latest_ods_url})."
     )
-    return latest_ods_url
+    return (latest_ods_url,)
 
 
 @app.cell
@@ -149,7 +147,7 @@ def _(redownload_button):
 
 @app.cell
 def _(data_ready, mo, ods_path, pd):
-    mo.stop(not data_ready)
+    mo.stop(not data_ready, "Download data to continue")
 
     def load_sheets(path):
         try:
@@ -160,10 +158,16 @@ def _(data_ready, mo, ods_path, pd):
                 "Install it with `pip install odfpy` and re-run the notebook. "
                 f"Original error: {exc}"
             )
-            mo.stop(True)
+            mo.stop(True, "Install odfpy")
 
     sheets = load_sheets(ods_path)
     return (sheets,)
+
+
+@app.cell
+def _(data_ready):
+    data_ready
+    return
 
 
 @app.cell
@@ -244,7 +248,6 @@ def _(pd, sheets):
         ["accreditation"],
         "accreditation_type",
     )
-
     return (
         accreditation_sheet,
         accreditation_table,
@@ -254,7 +257,13 @@ def _(pd, sheets):
 
 
 @app.cell
-def _(accreditation_sheet, accreditation_table, capacity_sheet, capacity_table, mo):
+def _(
+    accreditation_sheet,
+    accreditation_table,
+    capacity_sheet,
+    capacity_table,
+    mo,
+):
     if capacity_table is None or accreditation_table is None:
         mo.md(
             "Could not locate the expected monthly tables. "
@@ -274,26 +283,26 @@ def _(accreditation_sheet, accreditation_table, capacity_sheet, capacity_table, 
 
 
 @app.cell
-def _(capacity_table, pd, plt):
+def _(capacity_table, plt, subset):
     capacity_plot = capacity_table.copy()
     capacity_plot = capacity_plot.sort_values("month")
 
-    fig, ax = plt.subplots(figsize=(10, 6))
-    for band, subset in capacity_plot.groupby("capacity_band"):
-        ax.plot(subset["month"], subset["installs"], label=str(band))
+    _fig, _ax = plt.subplots(figsize=(10, 6))
+    for _band, _subset in capacity_plot.groupby("capacity_band"):
+        _ax.plot(subset["month"], _subset["installs"], label=str(_band))
 
-    ax.set_title("Monthly solar PV installations by capacity band")
-    ax.set_xlabel("Month")
-    ax.set_ylabel("Number of installations")
-    ax.legend(title="Capacity band", bbox_to_anchor=(1.05, 1), loc="upper left")
-    ax.grid(True, alpha=0.3)
-    fig.tight_layout()
-    fig
+    _ax.set_title("Monthly solar PV installations by capacity band")
+    _ax.set_xlabel("Month")
+    _ax.set_ylabel("Number of installations")
+    _ax.legend(title="Capacity band", bbox_to_anchor=(1.05, 1), loc="upper left")
+    _ax.grid(True, alpha=0.3)
+    _fig.tight_layout()
+    _fig
     return
 
 
 @app.cell
-def _(accreditation_table, pd, plt):
+def _(accreditation_table, plt):
     accreditation_plot = accreditation_table.copy()
     accreditation_plot = accreditation_plot.sort_values("month")
 
@@ -308,7 +317,7 @@ def _(accreditation_table, pd, plt):
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
     fig
-    return
+    return (subset,)
 
 
 if __name__ == "__main__":
