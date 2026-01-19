@@ -79,12 +79,6 @@ def _(CARBON_INTENSITY_URL, Path, dt, mo, redownload_button, requests):
 @app.cell
 def _(redownload_button):
     redownload_button
-    #mo.vstack(
-    #   [
-    #        mo.md(f"{last_updated}"),
-    #        redownload_button,
-    #    ]
-    #)
     return
 
 
