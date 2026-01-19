@@ -280,91 +280,85 @@ def _(pd, re, sheets):
         sheets,
         ["table_1_by_capacity_new", "table_1_by_capacity"],
     )
-    accreditation_sheet = pick_sheet(sheets, ["table_2_by_accreditation"])
 
     capacity_table = (
         extract_cumulative_deployments(sheets[capacity_sheet], "capacity_band")
         if capacity_sheet
         else None
     )
-    accreditation_table = (
-        extract_cumulative_deployments(
-            sheets[accreditation_sheet],
-            "accreditation_type",
-        )
-        if accreditation_sheet
-        else None
-    )
-    return (
-        accreditation_sheet,
-        accreditation_table,
-        capacity_sheet,
-        capacity_table,
-    )
+    return capacity_sheet, capacity_table
 
 
 @app.cell
-def _(
-    accreditation_sheet,
-    accreditation_table,
-    capacity_sheet,
-    capacity_table,
-    mo,
-):
-    if capacity_table is None or accreditation_table is None:
+def _(capacity_sheet, capacity_table, mo):
+    if capacity_table is None:
         mo.md(
             "Could not locate the expected cumulative count tables. "
             "Check the sheet names and update the parsing rules if the layout changed."
         )
         mo.stop(True)
 
-    mo.md(
-        "\n".join(
-            [
-                f"Using capacity table from sheet: `{capacity_sheet}`.",
-                f"Using accreditation table from sheet: `{accreditation_sheet}`.",
-            ]
-        )
-    )
+    mo.md(f"Using capacity table from sheet: `{capacity_sheet}`.")
     return
 
 
 @app.cell
-def _(ax, capacity_table, plt, subset):
+def _(capacity_table, pd, plt, re):
+    def classify_band(label: str) -> str:
+        lower = str(label).lower()
+        if "mw" in lower:
+            return "large"
+        values = [float(val) for val in re.findall(r"\d+(?:\.\d+)?", lower)]
+        if not values:
+            return "large"
+        return "small" if max(values) <= 10 and "kw" in lower else "large"
+
+    def stacked_area(plot_df: pd.DataFrame, title: str):
+        pivot = (
+            plot_df.pivot_table(
+                index="month",
+                columns="capacity_band",
+                values="deployments",
+                aggfunc="sum",
+            )
+            .sort_index()
+            .fillna(0)
+        )
+        cumulative = pivot.cumsum()
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.stackplot(
+            cumulative.index,
+            [cumulative[col].values for col in cumulative.columns],
+            labels=[str(col) for col in cumulative.columns],
+        )
+        ax.set_title(title)
+        ax.set_xlabel("Month")
+        ax.set_ylabel("Total installations")
+        ax.legend(title="Capacity band", bbox_to_anchor=(1.05, 1), loc="upper left")
+        ax.grid(True, alpha=0.3)
+        fig.tight_layout()
+        return fig
+
     capacity_plot = capacity_table.copy()
     capacity_plot = capacity_plot.sort_values("month")
+    capacity_plot["size_class"] = capacity_plot["capacity_band"].apply(classify_band)
 
-    _fig, _ax = plt.subplots(figsize=(10, 6))
-    for _band, _subset in capacity_plot.groupby("capacity_band"):
-        ax.plot(subset["month"], _subset["deployments"], label=str(_band))
-
-    _ax.set_title("Monthly solar PV installations by capacity band")
-    _ax.set_xlabel("Month")
-    _ax.set_ylabel("Number of installations")
-    _ax.legend(title="Capacity band", bbox_to_anchor=(1.05, 1), loc="upper left")
-    _ax.grid(True, alpha=0.3)
-    _fig.tight_layout()
-    _fig
+    _fig_small = stacked_area(
+        capacity_plot[capacity_plot["size_class"] == "small"],
+        "Total installed solar PV (small <10 kW installations)",
+    )
+    _fig_large = stacked_area(
+        capacity_plot[capacity_plot["size_class"] == "large"],
+        "Total installed solar PV (large ≥10 kW installations)",
+    )
+    _fig_total = stacked_area(
+        capacity_plot,
+        "Total installed solar PV (all capacity bands)",
+    )
+    _fig_small
+    _fig_large
+    _fig_total
     return
-
-
-@app.cell
-def _(accreditation_table, plt):
-    accreditation_plot = accreditation_table.copy()
-    accreditation_plot = accreditation_plot.sort_values("month")
-
-    fig, ax = plt.subplots(figsize=(10, 6))
-    for accreditation, subset in accreditation_plot.groupby("accreditation_type"):
-        ax.plot(subset["month"], subset["deployments"], label=str(accreditation))
-
-    ax.set_title("Monthly solar PV installations by accreditation type")
-    ax.set_xlabel("Month")
-    ax.set_ylabel("Number of installations")
-    ax.legend(title="Accreditation", bbox_to_anchor=(1.05, 1), loc="upper left")
-    ax.grid(True, alpha=0.3)
-    fig.tight_layout()
-    fig
-    return ax, subset
 
 
 if __name__ == "__main__":
