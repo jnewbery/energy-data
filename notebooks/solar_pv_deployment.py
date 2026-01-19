@@ -303,7 +303,7 @@ def _(capacity_sheet, capacity_table, mo):
 
 
 @app.cell
-def _(capacity_table, pd, re):
+def _(capacity_table, re):
     def classify_band(label: str) -> str:
         lower = str(label).lower()
         if "mw" in lower:
@@ -316,7 +316,7 @@ def _(capacity_table, pd, re):
     capacity_plot = capacity_table.copy()
     capacity_plot = capacity_plot.sort_values("month")
     capacity_plot["size_class"] = capacity_plot["capacity_band"].apply(classify_band)
-    return capacity_plot
+    return (capacity_plot,)
 
 
 @app.cell
@@ -390,8 +390,7 @@ def _(capacity_plot, go, mo, pd, show_large, show_small):
         selected_classes.append("large")
 
     if not selected_classes:
-        mo.md("Select at least one size class to display the chart.")
-        return
+        mo.stop("Select at least one size class to display the chart.")
 
     filtered = capacity_plot[capacity_plot["size_class"].isin(selected_classes)]
     title = "Total installed solar PV (" + ", ".join(selected_classes) + " capacity bands)"
