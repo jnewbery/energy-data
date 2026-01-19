@@ -29,7 +29,8 @@ def _(mo):
 
     This notebook downloads the latest monthly solar PV deployment dataset from GOV.UK
     and charts the number of installations since 2010, split by capacity band and
-    accreditation type.
+    accreditation type. Monthly deployments are derived from the cumulative counts
+    in the source workbook.
     """)
     return
 
@@ -69,7 +70,8 @@ def _(GOV_UK_PAGE, dt, mo, re, requests):
     filtered_links = [
         link
         for link in links
-        if "Solar_photovoltaics_deployment" in link or "solar_photovoltaics_deployment" in link
+        if "Solar_photovoltaics_deployment" in link
+        or "solar_photovoltaics_deployment" in link
     ]
 
     if not filtered_links:
@@ -92,9 +94,7 @@ def _(GOV_UK_PAGE, dt, mo, re, requests):
     latest_dataset_date = parse_dataset_date(latest_ods_url)
     latest_dataset_label = latest_dataset_date.strftime("%B %Y")
 
-    mo.md(
-        f"Latest dataset discovered: [{latest_dataset_label}]({latest_ods_url})."
-    )
+    mo.md(f"Latest dataset discovered: [{latest_dataset_label}]({latest_ods_url}).")
     return (latest_ods_url,)
 
 
@@ -128,7 +128,8 @@ def _(Path, dt, latest_ods_url, mo, redownload_button, requests):
             tz=dt.timezone.utc,
         ).strftime("%Y-%m-%d %H:%M:%S %Z")
         update_msg = mo.md(
-            f"Latest dataset saved as `solar_photovoltaics_deployment.ods` on {last_updated_ts}."
+            "Latest dataset saved as `solar_photovoltaics_deployment.ods` on "
+            f"{last_updated_ts}."
         )
     else:
         update_msg = mo.md(
@@ -165,88 +166,134 @@ def _(data_ready, mo, ods_path, pd):
 
 
 @app.cell
-def _(data_ready):
-    data_ready
-    return
-
-
-@app.cell
-def _(pd, sheets):
+def _(pd, re, sheets):
     def normalize_sheet(df: pd.DataFrame) -> pd.DataFrame:
         trimmed = df.dropna(how="all").reset_index(drop=True)
         trimmed = trimmed.loc[:, trimmed.notna().any()]
         return trimmed
 
-    def find_header_row(df: pd.DataFrame, required_terms: list[str]) -> int | None:
-        for idx in range(min(len(df), 30)):
+    def find_header_row(df: pd.DataFrame, header_text: str) -> int | None:
+        for idx in range(min(len(df), 40)):
             row_text = " ".join(str(value).lower() for value in df.iloc[idx].values)
-            if "month" in row_text and all(term in row_text for term in required_terms):
+            if header_text in row_text:
                 return idx
         return None
 
-    def extract_monthly_table(
+    def parse_month_label(label: str) -> pd.Timestamp | None:
+        if label is None:
+            return None
+        text = str(label).strip()
+        match = re.match(r"^([A-Za-z]{3,9})\s*(\d{4})$", text)
+        if not match:
+            return None
+        month_text, year_text = match.groups()
+        for fmt in ("%b%Y", "%B%Y"):
+            try:
+                return pd.to_datetime(f"{month_text}{year_text}", format=fmt)
+            except ValueError:
+                continue
+        return None
+
+    def extract_cumulative_deployments(
         df: pd.DataFrame,
-        required_terms: list[str],
         category_name: str,
+        region: str = "UK",
     ) -> pd.DataFrame | None:
         df = normalize_sheet(df)
-        header_row = find_header_row(df, required_terms)
+        header_row = find_header_row(df, "cumulative count")
         if header_row is None:
             return None
-        df.columns = [str(value).strip() for value in df.iloc[header_row].values]
+        header_values = [
+            str(value).strip() if pd.notna(value) else ""
+            for value in df.iloc[header_row].values
+        ]
+        if not header_values:
+            return None
+        if not header_values[0]:
+            header_values[0] = "category"
         df = df.iloc[header_row + 1 :].copy()
-        date_col = next(
-            (
-                col
-                for col in df.columns
-                if "month" in col.lower() or "date" in col.lower()
-            ),
-            None,
-        )
-        if date_col is None:
-            return None
-        df = df.rename(columns={date_col: "month"})
-        df["month"] = pd.to_datetime(df["month"], errors="coerce")
-        df = df[df["month"].notna()]
-        df = df[df["month"] >= "2010-01-01"]
-        value_cols = [col for col in df.columns if col != "month"]
-        if not value_cols:
-            return None
-        tidy = df.melt(
-            id_vars=["month"],
-            value_vars=value_cols,
-            var_name=category_name,
-            value_name="installs",
-        )
-        tidy["installs"] = pd.to_numeric(tidy["installs"], errors="coerce")
-        tidy = tidy.dropna(subset=["installs"])
-        return tidy
+        df.columns = header_values
+        first_col = header_values[0]
+        df = df.rename(columns={first_col: "category"})
 
-    def find_table_by_terms(
-        all_sheets: dict[str, pd.DataFrame],
-        terms: list[str],
-        category_name: str,
-    ) -> tuple[str | None, pd.DataFrame | None]:
-        for name, sheet in all_sheets.items():
-            if all(term in name.lower() for term in terms):
-                table = extract_monthly_table(sheet, terms, category_name)
-                if table is not None:
-                    return name, table
-        for name, sheet in all_sheets.items():
-            table = extract_monthly_table(sheet, terms, category_name)
-            if table is not None:
-                return name, table
-        return None, None
+        region_labels = {"GB", "NI", "UK"}
+        region_values = []
+        current_region = None
+        for _, row in df.iterrows():
+            category = str(row["category"]).strip()
+            other_values = row.drop(labels=["category"]).apply(
+                lambda value: str(value).strip() if pd.notna(value) else ""
+            )
+            if category in region_labels and all(value == "" for value in other_values):
+                current_region = category
+                region_values.append(None)
+            else:
+                region_values.append(current_region)
+        df["region"] = region_values
+        df = df[df["region"] == region]
+        df["category"] = df["category"].astype(str).str.strip()
+        df = df[df["category"] != ""]
+        df = df[
+            ~df["category"].str.lower().str.startswith(
+                ("total", "pre 2009", "of which")
+            )
+        ]
 
-    capacity_sheet, capacity_table = find_table_by_terms(
+        month_map = {}
+        for col in df.columns:
+            if col in ("category", "region"):
+                continue
+            parsed = parse_month_label(col)
+            if parsed is not None:
+                month_map[col] = parsed
+        if not month_map:
+            return None
+        value_cols = list(month_map.keys())
+
+        tidy = df[["category"] + value_cols].melt(
+            id_vars=["category"],
+            var_name="month",
+            value_name="cumulative",
+        )
+        tidy["month"] = tidy["month"].map(month_map)
+        tidy = tidy.dropna(subset=["month"])
+        tidy["cumulative"] = (
+            tidy["cumulative"].astype(str).str.replace(",", "", regex=False)
+        )
+        tidy["cumulative"] = pd.to_numeric(tidy["cumulative"], errors="coerce")
+        tidy = tidy.dropna(subset=["cumulative"])
+        tidy = tidy.sort_values(["category", "month"])
+        tidy["deployments"] = tidy.groupby("category")["cumulative"].diff()
+        tidy["deployments"] = tidy["deployments"].fillna(tidy["cumulative"])
+        tidy = tidy[tidy["month"] >= "2010-01-01"]
+        tidy = tidy.rename(columns={"category": category_name})
+        return tidy[["month", category_name, "deployments"]]
+
+    def pick_sheet(all_sheets: dict[str, pd.DataFrame], names: list[str]) -> str | None:
+        for name in names:
+            for sheet_name in all_sheets:
+                if name in sheet_name.lower():
+                    return sheet_name
+        return None
+
+    capacity_sheet = pick_sheet(
         sheets,
-        ["capacity"],
-        "capacity_band",
+        ["table_1_by_capacity_new", "table_1_by_capacity"],
     )
-    accreditation_sheet, accreditation_table = find_table_by_terms(
-        sheets,
-        ["accreditation"],
-        "accreditation_type",
+    accreditation_sheet = pick_sheet(sheets, ["table_2_by_accreditation"])
+
+    capacity_table = (
+        extract_cumulative_deployments(sheets[capacity_sheet], "capacity_band")
+        if capacity_sheet
+        else None
+    )
+    accreditation_table = (
+        extract_cumulative_deployments(
+            sheets[accreditation_sheet],
+            "accreditation_type",
+        )
+        if accreditation_sheet
+        else None
     )
     return (
         accreditation_sheet,
@@ -266,7 +313,7 @@ def _(
 ):
     if capacity_table is None or accreditation_table is None:
         mo.md(
-            "Could not locate the expected monthly tables. "
+            "Could not locate the expected cumulative count tables. "
             "Check the sheet names and update the parsing rules if the layout changed."
         )
         mo.stop(True)
@@ -283,13 +330,13 @@ def _(
 
 
 @app.cell
-def _(capacity_table, plt, subset):
+def _(ax, capacity_table, plt, subset):
     capacity_plot = capacity_table.copy()
     capacity_plot = capacity_plot.sort_values("month")
 
     _fig, _ax = plt.subplots(figsize=(10, 6))
     for _band, _subset in capacity_plot.groupby("capacity_band"):
-        _ax.plot(subset["month"], _subset["installs"], label=str(_band))
+        ax.plot(subset["month"], _subset["deployments"], label=str(_band))
 
     _ax.set_title("Monthly solar PV installations by capacity band")
     _ax.set_xlabel("Month")
@@ -308,7 +355,7 @@ def _(accreditation_table, plt):
 
     fig, ax = plt.subplots(figsize=(10, 6))
     for accreditation, subset in accreditation_plot.groupby("accreditation_type"):
-        ax.plot(subset["month"], subset["installs"], label=str(accreditation))
+        ax.plot(subset["month"], subset["deployments"], label=str(accreditation))
 
     ax.set_title("Monthly solar PV installations by accreditation type")
     ax.set_xlabel("Month")
@@ -317,7 +364,7 @@ def _(accreditation_table, plt):
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
     fig
-    return (subset,)
+    return ax, subset
 
 
 if __name__ == "__main__":
