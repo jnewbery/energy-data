@@ -40,6 +40,26 @@ def _():
 
 @app.cell
 def _(mo):
+    end_year_slider = mo.ui.slider(
+        start=2026,
+        stop=2050,
+        step=1,
+        value=2026,
+        label="Projection end year",
+    )
+    end_year_slider
+    return (end_year_slider,)
+
+
+@app.cell
+def _(end_year_slider):
+    min_intensity = 5.0
+    projection_end_year = end_year_slider.value
+    return min_intensity, projection_end_year
+
+
+@app.cell
+def _(mo):
     # This button can't be defined in the same cell that its value is read
     redownload_button = mo.ui.button(
         value=0,
@@ -172,7 +192,16 @@ def _(pl, seasonal):
 
 
 @app.cell
-def _(dt, last_five_years, pl, plt, regression_info, seasonal):
+def _(
+    dt,
+    last_five_years,
+    min_intensity,
+    pl,
+    plt,
+    projection_end_year,
+    regression_info,
+    seasonal,
+):
     season_colors = {
         "winter": "tab:blue",
         "summer": "gold",
@@ -202,14 +231,22 @@ def _(dt, last_five_years, pl, plt, regression_info, seasonal):
         "spring_autumn": [(4, 0), (10, 0)],
     }
     trend_month = {
-        "winter": (1, 1, 2025),
-        "summer": (7, 0, 2026),
-        "spring_autumn": (7, 0, 2026),
+        "winter": (1, 1, projection_end_year),
+        "summer": (7, 0, projection_end_year),
+        "spring_autumn": (7, 0, projection_end_year),
     }
     for _season, color in season_colors.items():
         season_data = seasonal.filter(pl.col("season") == _season)
         years = season_data.get_column("season_year").to_list()
         values = season_data.get_column("avg_actual").to_list()
+        def _year_to_date(year_value, month_value, offset):
+            base_year = int(year_value)
+            remainder = year_value - base_year
+            date_value = dt.date(base_year + offset, month_value, 1)
+            if remainder:
+                date_value += dt.timedelta(days=int(round(remainder * 365.25)))
+            return date_value
+
         for _month, year_offset in representative_months[_season]:
             ax.scatter(
                 [dt.date(year + year_offset, _month, 1) for year in years],
@@ -224,13 +261,33 @@ def _(dt, last_five_years, pl, plt, regression_info, seasonal):
         _intercept = regression_info[_season]["intercept"]
         if years:
             line_end_year = trend_month[_season][2]
-            line_x = [min(years), line_end_year]
-            line_y = [_slope * x + _intercept for x in line_x]
+            line_start_year = min(years)
+            hit_year = None
+            if _slope < 0:
+                hit_year = (min_intensity - _intercept) / _slope
+            if hit_year is None or hit_year >= line_end_year:
+                line_x = [line_start_year, line_end_year]
+                line_y = [
+                    _slope * line_start_year + _intercept,
+                    _slope * line_end_year + _intercept,
+                ]
+                end_value = max(min_intensity, line_y[-1])
+            elif hit_year <= line_start_year:
+                line_x = [line_start_year, line_end_year]
+                line_y = [min_intensity, min_intensity]
+                end_value = min_intensity
+            else:
+                line_x = [line_start_year, hit_year, line_end_year]
+                line_y = [
+                    _slope * line_start_year + _intercept,
+                    min_intensity,
+                    min_intensity,
+                ]
+                end_value = min_intensity
             _month, year_offset, _ = trend_month[_season]
             end_date = dt.date(line_end_year + year_offset, _month, 1)
-            end_value = _slope * line_end_year + _intercept
             ax.plot(
-                [dt.date(year + year_offset, _month, 1) for year in line_x],
+                [_year_to_date(year, _month, year_offset) for year in line_x],
                 line_y,
                 linestyle="--",
                 color=color,
@@ -282,7 +339,10 @@ def _(dt, last_five_years, pl, plt, regression_info, seasonal):
             markersize=8,
         ),
     ]
-    marker_labels = ["Seasonal representative points", "Interpolated 2026 value"]
+    marker_labels = [
+        "Seasonal representative points",
+        f"Interpolated {projection_end_year} value",
+    ]
     ax.add_artist(season_legend)
     ax.legend(
         marker_handles,
@@ -296,7 +356,7 @@ def _(dt, last_five_years, pl, plt, regression_info, seasonal):
 
 
 @app.cell
-def _(mo, regression_info):
+def _(min_intensity, mo, regression_info):
     season_month = {
         "winter": 1,
         "spring_autumn": 7,
@@ -304,17 +364,56 @@ def _(mo, regression_info):
     }
     predictions_2026 = []
     for season, month in season_month.items():
-        season_year = 2026 if month == 12 else 2025 if month in (1, 2) else 2026
+        _season_year = 2026 if month == 12 else 2025 if month in (1, 2) else 2026
         slope = regression_info[season]["slope"]
         intercept = regression_info[season]["intercept"]
+        predicted_2026 = max(min_intensity, slope * _season_year + intercept)
         predictions_2026.append(
             {
                 "Season": season.replace("_", "/").title(),
-                "Predicted 2026 gCO₂/kWh": round(slope * season_year + intercept, 2),
+                "Predicted 2026 gCO₂/kWh": round(predicted_2026, 2),
             }
         )
     predictions_table = mo.ui.table(predictions_2026)
     predictions_table
+    return
+
+
+@app.cell
+def _(min_intensity, mo, projection_end_year, regression_info):
+    season_map = {
+        "winter": "Winter",
+        "spring_autumn": "Mid",
+        "summer": "Summer",
+    }
+    latest_year = max(
+        max(info["season_years"]) if info["season_years"] else projection_end_year
+        for info in regression_info.values()
+    )
+    start_year = max(2026, latest_year + 1)
+    year_rows = []
+    for year in range(start_year, projection_end_year + 1):
+        season_values = {}
+        for season_key in ("winter", "spring_autumn", "summer"):
+            info = regression_info[season_key]
+            season_year = year - 1 if season_key == "winter" else year
+            predicted_year = max(
+                min_intensity,
+                info["slope"] * season_year + info["intercept"],
+            )
+            season_values[season_key] = predicted_year
+        blended = sum(season_values.values()) / len(season_values)
+        year_rows.append(
+            {
+                "Year": str(year),
+                "Winter gCO₂/kWh": round(season_values["winter"], 2),
+                "Mid gCO₂/kWh": round(season_values["spring_autumn"], 2),
+                "Summer gCO₂/kWh": round(season_values["summer"], 2),
+                "Blended gCO₂/kWh": round(blended, 2),
+            }
+        )
+    projection_table = mo.ui.table(year_rows)
+    projection_table
     return
 
 
