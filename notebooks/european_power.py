@@ -17,9 +17,10 @@ def _():
     import marimo as mo
     import pandas as pd
     import polars as pl
+    import plotly.graph_objects as go
     import requests
 
-    return Path, dt, mo, pd, pl, requests
+    return Path, dt, go, mo, pd, pl, requests
 
 
 @app.cell
@@ -218,8 +219,10 @@ def _(eu_data_ready, eu_workbook_path, mo, parse_workbook):
 @app.cell
 def _(european_power_df, european_power_sheets, mo):
     mo.md(f"""
-    EU datasheets parsed: {european_power_sheets.height} sheets, "
-        f"{european_power_df.height:,} rows, {european_power_df.width:,} columns.
+    EU datasheets parsed:
+    - {european_power_sheets.height} sheets
+    - {european_power_df.height:,} rows
+    - {european_power_df.width:,} columns
     """)
     return
 
@@ -231,29 +234,178 @@ def _(european_power_df, european_power_sheets):
 
 
 @app.cell
-def _(ghg_data_ready, ghg_workbook_path, mo, parse_workbook):
+def _(ghg_data_ready, ghg_workbook_path, mo, pd, pl):
     mo.stop(not ghg_data_ready, "Download the GHG emissions factors workbook to continue.")
 
-    ghg_emissions_factors_df, ghg_emissions_sheets = parse_workbook(ghg_workbook_path)
-    mo.stop(
-        ghg_emissions_factors_df is None,
-        "No non-empty sheets were found in the GHG workbook.",
+    _table1_sheet_name = "Table1_EU_IPCC_CO2"
+    _table1_raw = pd.read_excel(
+        ghg_workbook_path,
+        sheet_name=_table1_sheet_name,
+        header=None,
     )
-    return ghg_emissions_factors_df, ghg_emissions_sheets
+
+    _year_values = _table1_raw.iloc[1, 2:].tolist()
+    ghg_table1_years = []
+    for _value in _year_values:
+        if pd.isna(_value):
+            continue
+        try:
+            ghg_table1_years.append(int(_value))
+        except (TypeError, ValueError):
+            continue
+
+    mo.stop(not ghg_table1_years, "No year columns were found in Table1_EU_IPCC_CO2.")
+
+    _year_columns = [str(_year) for _year in ghg_table1_years]
+    _table1_wide_pdf = _table1_raw.iloc[2:, : 2 + len(ghg_table1_years)].copy()
+    _table1_wide_pdf.columns = ["country_code", "country_name"] + _year_columns
+    _table1_wide_pdf = _table1_wide_pdf.dropna(how="all")
+
+    _table1_wide_pdf["country_code"] = _table1_wide_pdf["country_code"].astype(
+        "string"
+    ).str.strip()
+    _table1_wide_pdf["country_name"] = _table1_wide_pdf["country_name"].astype(
+        "string"
+    ).str.strip()
+    _table1_wide_pdf = _table1_wide_pdf[
+        _table1_wide_pdf["country_code"].notna()
+        & _table1_wide_pdf["country_name"].notna()
+        & (_table1_wide_pdf["country_code"] != "")
+        & (_table1_wide_pdf["country_name"] != "")
+    ].copy()
+
+    _table1_wide_pdf[_year_columns] = (
+        _table1_wide_pdf[_year_columns]
+        .replace(r"^\s*-\s*$", None, regex=True)
+        .apply(pd.to_numeric, errors="coerce")
+    )
+
+    ghg_table1_wide_df = pl.from_pandas(_table1_wide_pdf, include_index=False)
+    ghg_table1_co2_df = (
+        ghg_table1_wide_df.unpivot(
+            index=["country_code", "country_name"],
+            variable_name="year",
+            value_name="grid_carbon_intensity_tco2_per_mwh",
+        )
+        .with_columns(
+            pl.col("year").cast(pl.Int16),
+            (
+                pl.col("grid_carbon_intensity_tco2_per_mwh").cast(pl.Float64) * 1000.0
+            ).alias("grid_carbon_intensity_gco2_per_kwh"),
+        )
+        .drop("grid_carbon_intensity_tco2_per_mwh")
+        .sort(["country_code", "year"])
+    )
+    return ghg_table1_co2_df, ghg_table1_wide_df, ghg_table1_years
 
 
-@app.cell
-def _(ghg_emissions_factors_df, ghg_emissions_sheets, mo):
+@app.cell(hide_code=True)
+def _(ghg_table1_co2_df, ghg_table1_years, mo):
     mo.md(f"""
-    GHG factors parsed: {ghg_emissions_sheets.height} sheets, "
-        f"{ghg_emissions_factors_df.height:,} rows, {ghg_emissions_factors_df.width:,} columns.
+    GHG Table1 (`Table1_EU_IPCC_CO2`) parsed:
+    - {ghg_table1_co2_df.height:,} rows
+    - {ghg_table1_co2_df.select('country_code').n_unique()} countries
+    - years {min(ghg_table1_years)}-{max(ghg_table1_years)}
     """)
     return
 
 
 @app.cell
-def _(ghg_emissions_factors_df, ghg_emissions_sheets):
-    ghg_emissions_sheets, ghg_emissions_factors_df.head(20)
+def _(ghg_table1_co2_df, pl):
+    country_code_to_iso3 = {
+        "AT": "AUT",
+        "BE": "BEL",
+        "BG": "BGR",
+        "CY": "CYP",
+        "CZ": "CZE",
+        "DE": "DEU",
+        "DK": "DNK",
+        "EE": "EST",
+        "EL": "GRC",
+        "ES": "ESP",
+        "FI": "FIN",
+        "FR": "FRA",
+        "HR": "HRV",
+        "HU": "HUN",
+        "IE": "IRL",
+        "IS": "ISL",
+        "IT": "ITA",
+        "LT": "LTU",
+        "LU": "LUX",
+        "LV": "LVA",
+        "MT": "MLT",
+        "NL": "NLD",
+        "NO": "NOR",
+        "PL": "POL",
+        "PT": "PRT",
+        "RO": "ROU",
+        "SE": "SWE",
+        "SI": "SVN",
+        "SK": "SVK",
+        "UK": "GBR",
+    }
+    iso3_lookup_df = pl.DataFrame(
+        {
+            "country_code": list(country_code_to_iso3.keys()),
+            "iso3": list(country_code_to_iso3.values()),
+        }
+    )
+
+    ghg_1990_choropleth_df = (
+        ghg_table1_co2_df.filter(
+            pl.col("year").eq(1990)
+            & pl.col("grid_carbon_intensity_gco2_per_kwh").is_not_null()
+        )
+        .join(iso3_lookup_df, on="country_code", how="left")
+        .filter(pl.col("iso3").is_not_null())
+        .sort("country_code")
+    )
+    return (ghg_1990_choropleth_df,)
+
+
+@app.cell
+def _(ghg_1990_choropleth_df, go, mo):
+    mo.stop(
+        ghg_1990_choropleth_df.is_empty(),
+        "No 1990 values were parsed for the choropleth.",
+    )
+
+    ghg_1990_choropleth_fig = go.Figure(
+        data=go.Choropleth(
+            locations=ghg_1990_choropleth_df.get_column("iso3").to_list(),
+            z=ghg_1990_choropleth_df.get_column(
+                "grid_carbon_intensity_gco2_per_kwh"
+            ).to_list(),
+            text=ghg_1990_choropleth_df.get_column("country_name").to_list(),
+            locationmode="ISO-3",
+            colorscale="YlOrRd",
+            colorbar_title="gCO2/kWh",
+            marker_line_color="white",
+            marker_line_width=0.6,
+            hovertemplate=(
+                "%{text}<br>"
+                "Grid intensity: %{z:.1f} gCO2/kWh"
+                "<extra></extra>"
+            ),
+        )
+    )
+    ghg_1990_choropleth_fig.update_layout(
+        title="Grid Carbon Intensity by Country (1990)",
+        geo=dict(
+            scope="europe",
+            fitbounds="locations",
+            showframe=False,
+            showcoastlines=True,
+            projection_type="mercator",
+        ),
+        margin=dict(l=0, r=0, t=48, b=0),
+    )
+    return
+
+
+@app.cell
+def _(ghg_table1_co2_df, ghg_table1_wide_df):
+    ghg_table1_co2_df.head(20), ghg_table1_wide_df.head(10)
     return
 
 
