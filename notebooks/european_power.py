@@ -5,7 +5,7 @@ Description: Download two European electricity workbooks and parse them into Pol
 
 import marimo
 
-__generated_with = "0.19.4"
+__generated_with = "0.20.2"
 app = marimo.App(width="medium")
 
 
@@ -18,6 +18,7 @@ def _():
     import pandas as pd
     import polars as pl
     import requests
+
     return Path, dt, mo, pd, pl, requests
 
 
@@ -29,6 +30,8 @@ def _(mo):
     This notebook pulls data from two datasets:
     1. EU Energy Statistical Country Datasheets (https://energy.ec.europa.eu/data-and-analysis/eu-energy-statistical-pocketbook-and-country-datasheets_en#country-datasheets)
     2. GHG Emissions Factors for Electricity Consumption (https://data.jrc.ec.europa.eu/dataset/919df040-0252-4e4e-ad82-c054896e1641)
+
+    Parsing runs automatically when the corresponding workbook file exists in `data/`.
     """)
     return
 
@@ -199,37 +202,17 @@ def _(pd, pl):
         parsed_df = pl.concat(sheet_frames, how="diagonal_relaxed")
         parsed_sheets = pl.DataFrame(sheet_stats).sort("rows", descending=True)
         return parsed_df, parsed_sheets
+
     return (parse_workbook,)
 
 
 @app.cell
-def _(mo):
-    parse_eu_button = mo.ui.button(
-        value=0,
-        on_click=lambda value: value + 1,
-        label="Parse EU datasheets into Polars",
-        kind="neutral",
-    )
-    return (parse_eu_button,)
-
-
-@app.cell
-def _(eu_data_ready, eu_workbook_path, mo, parse_eu_button, parse_workbook):
+def _(eu_data_ready, eu_workbook_path, mo, parse_workbook):
     mo.stop(not eu_data_ready, "Download the EU datasheets workbook to continue.")
-    mo.stop(
-        parse_eu_button.value == 0,
-        "Click **Parse EU datasheets into Polars** to load sheets.",
-    )
 
     european_power_df, european_power_sheets = parse_workbook(eu_workbook_path)
     mo.stop(european_power_df is None, "No non-empty sheets were found in the EU workbook.")
     return european_power_df, european_power_sheets
-
-
-@app.cell
-def _(parse_eu_button):
-    parse_eu_button
-    return
 
 
 @app.cell
@@ -248,23 +231,8 @@ def _(european_power_df, european_power_sheets):
 
 
 @app.cell
-def _(mo):
-    parse_ghg_button = mo.ui.button(
-        value=0,
-        on_click=lambda value: value + 1,
-        label="Parse GHG factors into Polars",
-        kind="neutral",
-    )
-    return (parse_ghg_button,)
-
-
-@app.cell
-def _(ghg_data_ready, ghg_workbook_path, mo, parse_ghg_button, parse_workbook):
+def _(ghg_data_ready, ghg_workbook_path, mo, parse_workbook):
     mo.stop(not ghg_data_ready, "Download the GHG emissions factors workbook to continue.")
-    mo.stop(
-        parse_ghg_button.value == 0,
-        "Click **Parse GHG factors into Polars** to load sheets.",
-    )
 
     ghg_emissions_factors_df, ghg_emissions_sheets = parse_workbook(ghg_workbook_path)
     mo.stop(
@@ -272,12 +240,6 @@ def _(ghg_data_ready, ghg_workbook_path, mo, parse_ghg_button, parse_workbook):
         "No non-empty sheets were found in the GHG workbook.",
     )
     return ghg_emissions_factors_df, ghg_emissions_sheets
-
-
-@app.cell
-def _(parse_ghg_button):
-    parse_ghg_button
-    return
 
 
 @app.cell
