@@ -6,7 +6,7 @@ Description: Download two European electricity workbooks and parse them into Pol
 import marimo
 
 __generated_with = "0.20.2"
-app = marimo.App(width="medium")
+app = marimo.App(width="full")
 
 
 @app.cell
@@ -311,7 +311,22 @@ def _(ghg_table1_co2_df, ghg_table1_years, mo):
 
 
 @app.cell
-def _(ghg_table1_co2_df, pl):
+def _(mo):
+    ghg_year_slider = mo.ui.slider(
+        start=1990,
+        stop=2020,
+        step=1,
+        value=1990,
+        show_value=False,
+        full_width=True,
+        label="Map year",
+    )
+    ghg_year_slider
+    return (ghg_year_slider,)
+
+
+@app.cell
+def _(ghg_table1_co2_df, ghg_year_slider, pl):
     country_code_to_iso3 = {
         "AT": "AUT",
         "BE": "BEL",
@@ -351,53 +366,129 @@ def _(ghg_table1_co2_df, pl):
         }
     )
 
-    ghg_1990_choropleth_df = (
+    selected_year = int(ghg_year_slider.value)
+    global_intensity_min = ghg_table1_co2_df.get_column(
+        "grid_carbon_intensity_gco2_per_kwh"
+    ).min()
+    global_intensity_max = ghg_table1_co2_df.get_column(
+        "grid_carbon_intensity_gco2_per_kwh"
+    ).max()
+    ghg_choropleth_df = (
         ghg_table1_co2_df.filter(
-            pl.col("year").eq(1990)
+            pl.col("year").eq(selected_year)
             & pl.col("grid_carbon_intensity_gco2_per_kwh").is_not_null()
         )
         .join(iso3_lookup_df, on="country_code", how="left")
         .filter(pl.col("iso3").is_not_null())
         .sort("country_code")
     )
-    return (ghg_1990_choropleth_df,)
+    return (
+        ghg_choropleth_df,
+        global_intensity_max,
+        global_intensity_min,
+        selected_year,
+    )
 
 
 @app.cell
-def _(ghg_1990_choropleth_df, go, mo):
+def _(mo, selected_year):
+    mo.md(f"""
+    Selected year: **{selected_year}**
+    """)
+    return
+
+
+@app.cell
+def _(
+    ghg_choropleth_df,
+    global_intensity_max,
+    global_intensity_min,
+    go,
+    mo,
+    selected_year,
+):
     mo.stop(
-        ghg_1990_choropleth_df.is_empty(),
-        "No 1990 values were parsed for the choropleth.",
+        ghg_choropleth_df.is_empty(),
+        f"No {selected_year} values were parsed for the choropleth.",
     )
 
-    ghg_1990_choropleth_fig = go.Figure(
+    mo.stop(
+        global_intensity_min is None or global_intensity_max is None,
+        "Global intensity bounds could not be determined.",
+    )
+    mo.stop(
+        global_intensity_min <= 0,
+        "Sub-linear color scaling requires positive intensity values.",
+    )
+
+    # Square-root scaling is gentler than log and still compresses outliers.
+    gamma = 0.5
+    tick_candidates = [10, 20, 50, 100, 200, 500, 1000, 2000]
+    colorbar_ticks = sorted(
+        {
+            round(float(global_intensity_min), 1),
+            *[
+                float(value)
+                for value in tick_candidates
+                if global_intensity_min <= value <= global_intensity_max
+            ],
+            round(float(global_intensity_max), 1),
+        }
+    )
+    tick_text = [
+        f"{int(value)}" if float(value).is_integer() else f"{value:.1f}"
+        for value in colorbar_ticks
+    ]
+    scaled_global_min = float(global_intensity_min) ** gamma
+    scaled_global_max = float(global_intensity_max) ** gamma
+    scaled_z_values = (
+        ghg_choropleth_df.get_column("grid_carbon_intensity_gco2_per_kwh")
+        .pow(gamma)
+        .to_list()
+    )
+    scaled_tick_values = [float(value) ** gamma for value in colorbar_ticks]
+
+    ghg_choropleth_fig = go.Figure(
         data=go.Choropleth(
-            locations=ghg_1990_choropleth_df.get_column("iso3").to_list(),
-            z=ghg_1990_choropleth_df.get_column(
-                "grid_carbon_intensity_gco2_per_kwh"
-            ).to_list(),
-            text=ghg_1990_choropleth_df.get_column("country_name").to_list(),
+            locations=ghg_choropleth_df.get_column("iso3").to_list(),
+            z=scaled_z_values,
+            text=ghg_choropleth_df.get_column("country_name").to_list(),
             locationmode="ISO-3",
             colorscale="YlOrRd",
-            colorbar_title="gCO2/kWh",
+            zmin=scaled_global_min,
+            zmax=scaled_global_max,
+            colorbar=dict(
+                title="gCO2/kWh",
+                tickmode="array",
+                tickvals=scaled_tick_values,
+                ticktext=tick_text,
+            ),
             marker_line_color="white",
             marker_line_width=0.6,
             hovertemplate=(
                 "%{text}<br>"
-                "Grid intensity: %{z:.1f} gCO2/kWh"
+                "Grid intensity: %{customdata:.1f} gCO2/kWh"
                 "<extra></extra>"
             ),
+            customdata=ghg_choropleth_df.get_column(
+                "grid_carbon_intensity_gco2_per_kwh"
+            ).to_list(),
         )
     )
-    ghg_1990_choropleth_fig.update_layout(
-        title="Grid Carbon Intensity by Country (1990)",
+    ghg_choropleth_fig.update_layout(
+        title=f"Grid Carbon Intensity by Country ({selected_year})",
         geo=dict(
             scope="europe",
-            fitbounds="locations",
+            center=dict(lat=54, lon=12),
+            lataxis=dict(range=[34, 72]),
+            lonaxis=dict(range=[-25, 45]),
             showframe=False,
             showcoastlines=True,
             projection_type="mercator",
+            fitbounds="locations",
         ),
+        #width=1200,
+        height=560,
         margin=dict(l=0, r=0, t=48, b=0),
     )
     return
