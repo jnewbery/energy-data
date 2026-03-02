@@ -260,7 +260,11 @@ def fetch_flows(
     in_domain: str,
     period_start: str,
     period_end: str,
+    retries: int = 3,
+    timeout: int = 120,
 ) -> ET.Element | None:
+    import time
+
     params = {
         "documentType": "A11",
         "out_Domain": out_domain,
@@ -269,25 +273,45 @@ def fetch_flows(
         "periodEnd": period_end,
         "securityToken": token,
     }
-    resp = requests.get(BASE_URL, params=params, timeout=60)
-    if resp.status_code != 200:
-        print(f"  HTTP {resp.status_code}: {resp.text[:200]}", file=sys.stderr)
-        return None
+    for attempt in range(1, retries + 1):
+        try:
+            resp = requests.get(BASE_URL, params=params, timeout=timeout)
+        except requests.exceptions.Timeout:
+            if attempt < retries:
+                wait = 2 ** attempt
+                print(f"timeout (attempt {attempt}/{retries}), retrying in {wait}s...", end=" ", flush=True)
+                time.sleep(wait)
+                continue
+            print(f"timeout after {retries} attempts", file=sys.stderr)
+            return None
+        except requests.exceptions.RequestException as e:
+            if attempt < retries:
+                wait = 2 ** attempt
+                print(f"error ({e}) (attempt {attempt}/{retries}), retrying in {wait}s...", end=" ", flush=True)
+                time.sleep(wait)
+                continue
+            print(f"request failed: {e}", file=sys.stderr)
+            return None
 
-    root = ET.fromstring(resp.text)
-    ns_match = root.tag.rstrip(">").split("{")
-    if len(ns_match) > 1 and "Acknowledgement" in root.tag:
-        # Error response
-        ns = "{" + ns_match[1] + "}"
-        reason = root.find(f".//{ns}Reason")
-        if reason is not None:
-            code_el = reason.find(f"{ns}code")
-            text_el = reason.find(f"{ns}text")
-            code = code_el.text if code_el is not None else "?"
-            text = text_el.text if text_el is not None else "?"
-            print(f"  API error [{code}]: {text}", file=sys.stderr)
-        return None
-    return root
+        if resp.status_code != 200:
+            print(f"  HTTP {resp.status_code}: {resp.text[:200]}", file=sys.stderr)
+            return None
+
+        root = ET.fromstring(resp.text)
+        ns_match = root.tag.rstrip(">").split("{")
+        if len(ns_match) > 1 and "Acknowledgement" in root.tag:
+            # Error response
+            ns = "{" + ns_match[1] + "}"
+            reason = root.find(f".//{ns}Reason")
+            if reason is not None:
+                code_el = reason.find(f"{ns}code")
+                text_el = reason.find(f"{ns}text")
+                code = code_el.text if code_el is not None else "?"
+                text = text_el.text if text_el is not None else "?"
+                print(f"  API error [{code}]: {text}", file=sys.stderr)
+            return None
+        return root
+    return None
 
 
 def resolution_to_minutes(resolution: str) -> int:
