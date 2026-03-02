@@ -237,6 +237,18 @@ def select_interconnections_interactive() -> list[tuple[str, str]]:
     return result
 
 
+def yearly_batches(start: date, end: date) -> list[tuple[date, date]]:
+    """Split a date range into ≤1-year batches (API hard limit is P1Y)."""
+    batches = []
+    batch_start = start
+    while batch_start <= end:
+        # End of this batch: one year later minus one day, capped at overall end
+        batch_end = min(date(batch_start.year + 1, batch_start.month, batch_start.day) - timedelta(days=1), end)
+        batches.append((batch_start, batch_end))
+        batch_start = batch_end + timedelta(days=1)
+    return batches
+
+
 def format_period(dt: date) -> str:
     """Format a date as YYYYMMDD0000 for the ENTSO-E API (midnight UTC)."""
     return dt.strftime("%Y%m%d0000")
@@ -398,11 +410,9 @@ def main() -> None:
     else:
         start_date = end_date - timedelta(days=7)
 
-    if (end_date - start_date).days > 365:
-        print("Warning: date range exceeds 365 days. The ENTSO-E API may return partial results.", file=sys.stderr)
-
-    period_start = format_period(start_date)
-    period_end = format_period(end_date + timedelta(days=1))  # end is exclusive in API
+    batches = yearly_batches(start_date, end_date)
+    if len(batches) > 1:
+        print(f"Note: date range spans {len(batches)} years; will make {len(batches)} API requests per interconnection.")
 
     print(f"\nFetching flows from {start_date} to {end_date} (UTC)")
     print(f"Interconnections: {', '.join(f'{o}-{i}' for o, i in interconnections)}\n")
@@ -410,20 +420,37 @@ def main() -> None:
     for out_country, in_country in interconnections:
         out_domain = EIC_CODES[out_country][0]
         in_domain = EIC_CODES[in_country][0]
-        print(f"  Fetching {out_country} → {in_country} ({out_domain} → {in_domain})...", end=" ", flush=True)
 
-        root = fetch_flows(token, out_domain, in_domain, period_start, period_end)
-        if root is None:
-            print("FAILED")
+        all_rows: list[dict] = []
+        failed = False
+        for batch_start, batch_end in batches:
+            label = f"{batch_start}–{batch_end}" if len(batches) > 1 else ""
+            print(f"  Fetching {out_country} → {in_country}{' ' + label if label else ''}...", end=" ", flush=True)
+
+            root = fetch_flows(
+                token, out_domain, in_domain,
+                format_period(batch_start),
+                format_period(batch_end + timedelta(days=1)),
+            )
+            if root is None:
+                print("FAILED")
+                failed = True
+                break
+
+            rows = parse_flows_xml(root, out_country, in_country, out_domain, in_domain)
+            if not rows:
+                print("no data")
+            else:
+                print(f"{len(rows)} rows")
+                all_rows.extend(rows)
+
+        if failed or not all_rows:
+            if not failed:
+                print(f"  → no data returned for {out_country}-{in_country}")
             continue
 
-        rows = parse_flows_xml(root, out_country, in_country, out_domain, in_domain)
-        if not rows:
-            print("no data returned")
-            continue
-
-        filepath = save_csv(rows, out_country, in_country, start_date, end_date)
-        print(f"saved {len(rows)} rows → {filepath}")
+        filepath = save_csv(all_rows, out_country, in_country, start_date, end_date)
+        print(f"  → saved {len(all_rows)} total rows → {filepath}")
 
     print("\nDone.")
 
