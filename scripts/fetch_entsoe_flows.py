@@ -11,69 +11,155 @@ import argparse
 import os
 import sys
 import xml.etree.ElementTree as ET
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 
 import polars as pl
 import requests
 
 BASE_URL = "https://web-api.tp.entsoe.eu/api"
 
-# EIC area codes for common bidding zones / countries
-EIC_CODES: dict[str, str] = {
-    "GB": "10YGB----------A",
-    "FR": "10YFR-RTE------C",
-    "BE": "10YBE----------2",
-    "NL": "10YNL----------L",
-    "DE": "10Y1001A1001A83F",  # Germany (bidding zone aggregate)
-    "ES": "10YES-REE------0",
-    "PT": "10YPT-REN------W",
-    "IT": "10YIT-GRTN-----B",
-    "CH": "10YCH-SWISSGRIDZ",
-    "AT": "10YAT-APG------L",
-    "DK1": "10YDK-1--------W",
-    "DK2": "10YDK-2--------M",
-    "NO1": "10YNO-1--------2",
-    "NO2": "10YNO-2--------T",
-    "SE1": "10Y1001A1001A44P",
-    "SE2": "10Y1001A1001A45N",
-    "SE3": "10Y1001A1001A46L",
-    "SE4": "10Y1001A1001A47J",
-    "FI": "10YFI-1--------U",
-    "PL": "10YPL-AREA-----S",
-    "CZ": "10YCZ-CEPS-----N",
-    "SK": "10YSK-SEPS-----K",
-    "HU": "10YHU-MAVIR----U",
-    "RO": "10YRO-TEL------P",
-    "HR": "10YHR-HEP------M",
-    "SI": "10YSI-ELES-----O",
-    "RS": "10YCS-SERBIATSOV",
-    "GR": "10YGR-HTSO-----Y",
-    "BG": "10YCA-BULGARIA-R",
+# EIC area codes sourced from the ENTSO-E Transparency Platform API documentation
+# and the entsoe-py open-source library (https://github.com/EnergieID/entsoe-py).
+# Each entry: short name -> (EIC code, human-readable description)
+# Note: DE_AT_LU (pre-Oct 2018) and DE_LU (post-Oct 2018) are separate historical BZs.
+EIC_CODES: dict[str, tuple[str, str]] = {
+    "AL":        ("10YAL-KESH-----5", "Albania"),
+    "AT":        ("10YAT-APG------L", "Austria"),
+    "BA":        ("10YBA-JPCC-----D", "Bosnia Herzegovina"),
+    "BE":        ("10YBE----------2", "Belgium"),
+    "BG":        ("10YCA-BULGARIA-R", "Bulgaria"),
+    "BY":        ("10Y1001A1001A51S", "Belarus"),
+    "CH":        ("10YCH-SWISSGRIDZ", "Switzerland"),
+    "CZ":        ("10YCZ-CEPS-----N", "Czech Republic"),
+    "DE_AT_LU":  ("10Y1001A1001A63L", "DE-AT-LU BZ (pre-Oct 2018)"),
+    "DE_LU":     ("10Y1001A1001A82H", "Germany-Luxembourg (post-Oct 2018)"),
+    "DK_1":      ("10YDK-1--------W", "Denmark DK1"),
+    "DK_2":      ("10YDK-2--------M", "Denmark DK2"),
+    "EE":        ("10Y1001A1001A39I", "Estonia"),
+    "ES":        ("10YES-REE------0", "Spain"),
+    "FI":        ("10YFI-1--------U", "Finland"),
+    "FR":        ("10YFR-RTE------C", "France"),
+    "GB":        ("10YGB----------A", "Great Britain"),
+    "GR":        ("10YGR-HTSO-----Y", "Greece"),
+    "HR":        ("10YHR-HEP------M", "Croatia"),
+    "HU":        ("10YHU-MAVIR----U", "Hungary"),
+    "IE":        ("10YIE-1001A00010", "Ireland (EirGrid CA)"),
+    "IE_SEM":    ("10Y1001A1001A59C", "Ireland SEM BZ"),
+    "IT_BRNN":   ("10Y1001A1001A699", "Italy-Brindisi"),
+    "IT_CALA":   ("10Y1001C--00096J", "Italy-Calabria"),
+    "IT_CNOR":   ("10Y1001A1001A70O", "Italy-Centre-North"),
+    "IT_CSUD":   ("10Y1001A1001A71M", "Italy-Centre-South"),
+    "IT_FOGN":   ("10Y1001A1001A72K", "Italy-Foggia"),
+    "IT_GR":     ("10Y1001A1001A66F", "Italy-Greece BZ"),
+    "IT_NORD":   ("10Y1001A1001A73I", "Italy-North"),
+    "IT_NORD_AT":("10Y1001A1001A80L", "Italy-North-AT BZ"),
+    "IT_NORD_CH":("10Y1001A1001A68B", "Italy-North-CH BZ"),
+    "IT_NORD_FR":("10Y1001A1001A81J", "Italy-North-FR BZ"),
+    "IT_ROSN":   ("10Y1001A1001A77A", "Italy-Rossano"),
+    "IT_SARD":   ("10Y1001A1001A74G", "Italy-Sardinia"),
+    "IT_SICI":   ("10Y1001A1001A75E", "Italy-Sicily"),
+    "IT_SUD":    ("10Y1001A1001A788", "Italy-South"),
+    "LT":        ("10YLT-1001A0008Q", "Lithuania"),
+    "LV":        ("10YLV-1001A00074", "Latvia"),
+    "ME":        ("10YCS-CG-TSO---S", "Montenegro"),
+    "MK":        ("10YMK-MEPSO----8", "North Macedonia"),
+    "MT":        ("10Y1001A1001A93C", "Malta"),
+    "NIE":       ("10Y1001A1001A016", "Northern Ireland"),
+    "NL":        ("10YNL----------L", "Netherlands"),
+    "NO_1":      ("10YNO-1--------2", "Norway NO1"),
+    "NO_2":      ("10YNO-2--------T", "Norway NO2"),
+    "NO_3":      ("10YNO-3--------J", "Norway NO3"),
+    "NO_4":      ("10YNO-4--------9", "Norway NO4"),
+    "NO_5":      ("10Y1001A1001A48H", "Norway NO5"),
+    "PL":        ("10YPL-AREA-----S", "Poland"),
+    "PT":        ("10YPT-REN------W", "Portugal"),
+    "RO":        ("10YRO-TEL------P", "Romania"),
+    "RS":        ("10YCS-SERBIATSOV", "Serbia"),
+    "RU":        ("10Y1001A1001A49F", "Russia"),
+    "RU_KGD":    ("10Y1001A1001A50U", "Russia-Kaliningrad"),
+    "SE_1":      ("10Y1001A1001A44P", "Sweden SE1"),
+    "SE_2":      ("10Y1001A1001A45N", "Sweden SE2"),
+    "SE_3":      ("10Y1001A1001A46L", "Sweden SE3"),
+    "SE_4":      ("10Y1001A1001A47J", "Sweden SE4"),
+    "SI":        ("10YSI-ELES-----O", "Slovenia"),
+    "SK":        ("10YSK-SEPS-----K", "Slovakia"),
+    "TR":        ("10YTR-TEIAS----W", "Turkey"),
+    "UA":        ("10Y1001C--00003F", "Ukraine"),
+    "XK":        ("10Y1001C--00100H", "Kosovo"),
 }
 
-# Well-known cross-border interconnections (out_country, in_country)
-COMMON_INTERCONNECTIONS: list[tuple[str, str]] = [
-    ("GB", "FR"),
-    ("GB", "BE"),
-    ("GB", "NL"),
-    ("FR", "BE"),
-    ("FR", "DE"),
-    ("FR", "ES"),
-    ("FR", "IT"),
-    ("FR", "CH"),
-    ("DE", "AT"),
-    ("DE", "CH"),
-    ("DE", "NL"),
-    ("DE", "BE"),
-    ("DE", "PL"),
-    ("DE", "CZ"),
-    ("NL", "BE"),
-    ("NO1", "SE3"),
-    ("NO2", "DK1"),
-    ("DK1", "SE3"),
-    ("DK2", "SE4"),
-    ("FI", "SE1"),
-]
+# Comprehensive list of known physical interconnections, sourced from the
+# ENTSO-E Transparency Platform documentation and the entsoe-py library
+# NEIGHBOURS mapping (https://github.com/EnergieID/entsoe-py).
+# These are all directed (A→B) pairs; both directions are valid queries.
+_NEIGHBOURS: dict[str, list[str]] = {
+    "AL":       ["ME", "MK", "GR", "RS"],
+    "AT":       ["CH", "CZ", "DE_LU", "HU", "IT_NORD", "SI"],
+    "BA":       ["HR", "ME", "RS"],
+    "BE":       ["NL", "DE_AT_LU", "FR", "GB", "DE_LU"],
+    "BG":       ["GR", "MK", "RO", "RS", "TR"],
+    "BY":       ["LT", "LV", "UA"],
+    "CH":       ["AT", "DE_AT_LU", "DE_LU", "FR", "IT_NORD", "IT_NORD_CH"],
+    "CZ":       ["AT", "DE_AT_LU", "DE_LU", "PL", "SK"],
+    "DE_AT_LU": ["BE", "CH", "CZ", "DK_1", "DK_2", "FR", "IT_NORD", "IT_NORD_AT", "NL", "PL", "SE_4", "SI"],
+    "DE_LU":    ["AT", "BE", "CH", "CZ", "DK_1", "DK_2", "FR", "NO_2", "NL", "PL", "SE_4"],
+    "DK_1":     ["DE_AT_LU", "DE_LU", "DK_2", "NO_2", "SE_3", "NL", "GB"],
+    "DK_2":     ["DE_AT_LU", "DE_LU", "DK_1", "SE_4"],
+    "EE":       ["FI", "LV", "RU"],
+    "ES":       ["FR", "PT"],
+    "FI":       ["EE", "NO_4", "RU", "SE_1", "SE_3"],
+    "FR":       ["BE", "CH", "DE_AT_LU", "DE_LU", "ES", "GB", "IT_NORD", "IT_NORD_FR"],
+    "GB":       ["BE", "FR", "IE_SEM", "NL", "NO_2", "DK_1"],
+    "GR":       ["AL", "BG", "IT_BRNN", "IT_GR", "MK", "TR"],
+    "HR":       ["BA", "HU", "RS", "SI"],
+    "HU":       ["AT", "HR", "RO", "RS", "SI", "SK", "UA"],
+    "IE":       ["GB", "NIE"],
+    "IE_SEM":   ["GB"],
+    "IT_BRNN":  ["GR", "IT_SUD"],
+    "IT_CALA":  ["IT_SICI", "IT_SUD"],
+    "IT_CNOR":  ["IT_NORD", "IT_CSUD", "IT_SARD"],
+    "IT_CSUD":  ["IT_CNOR", "IT_SARD", "IT_SUD"],
+    "IT_FOGN":  ["IT_SUD"],
+    "IT_NORD":  ["CH", "DE_AT_LU", "FR", "SI", "AT", "IT_CNOR"],
+    "IT_ROSN":  ["IT_SICI", "IT_SUD"],
+    "IT_SARD":  ["IT_CNOR", "IT_CSUD"],
+    "IT_SICI":  ["IT_CALA", "IT_ROSN", "MT"],
+    "IT_SUD":   ["IT_BRNN", "IT_CSUD", "IT_FOGN", "IT_ROSN", "IT_CALA"],
+    "LT":       ["BY", "LV", "PL", "RU_KGD", "SE_4"],
+    "LV":       ["EE", "LT", "RU"],
+    "ME":       ["AL", "BA", "RS"],
+    "MK":       ["BG", "GR", "RS"],
+    "MT":       ["IT_SICI"],
+    "NIE":      ["GB", "IE"],
+    "NL":       ["BE", "DE_AT_LU", "DE_LU", "GB", "NO_2", "DK_1"],
+    "NO_1":     ["NO_2", "NO_3", "NO_5", "SE_3"],
+    "NO_2":     ["DE_LU", "DK_1", "NL", "NO_1", "NO_5", "GB"],
+    "NO_3":     ["NO_1", "NO_4", "NO_5", "SE_2"],
+    "NO_4":     ["SE_2", "FI", "NO_3", "SE_1"],
+    "NO_5":     ["NO_1", "NO_2", "NO_3"],
+    "PL":       ["CZ", "DE_AT_LU", "DE_LU", "LT", "SE_4", "SK", "UA"],
+    "PT":       ["ES"],
+    "RO":       ["BG", "HU", "RS", "UA"],
+    "RS":       ["AL", "BA", "BG", "HR", "HU", "ME", "MK", "RO"],
+    "SE_1":     ["FI", "NO_4", "SE_2"],
+    "SE_2":     ["NO_3", "NO_4", "SE_1", "SE_3"],
+    "SE_3":     ["DK_1", "FI", "NO_1", "SE_2", "SE_4"],
+    "SE_4":     ["DE_AT_LU", "DE_LU", "DK_2", "LT", "PL", "SE_3"],
+    "SI":       ["AT", "DE_AT_LU", "HR", "IT_NORD", "HU"],
+    "SK":       ["CZ", "HU", "PL", "UA"],
+    "TR":       ["BG", "GR"],
+    "UA":       ["BY", "HU", "PL", "RO", "SK"],
+}
+
+# Derive the canonical ordered list of all unique undirected interconnections
+_seen: set[tuple[str, str]] = set()
+ALL_INTERCONNECTIONS: list[tuple[str, str]] = []
+for _out, _ins in sorted(_NEIGHBOURS.items()):
+    for _in in _ins:
+        pair = tuple(sorted([_out, _in]))
+        if pair not in _seen:
+            _seen.add(pair)
+            ALL_INTERCONNECTIONS.append((_out, _in))
 
 
 def get_token(args_token: str | None) -> str:
@@ -89,70 +175,66 @@ def get_token(args_token: str | None) -> str:
 
 
 def parse_interconnections(spec: str) -> list[tuple[str, str]]:
-    """Parse 'GB-FR,FR-DE' into [('GB','FR'), ('FR','DE')]."""
+    """Parse 'GB-FR,SE_3-DK_1' into [('GB','FR'), ('SE_3','DK_1')]."""
     pairs = []
+    known = set(EIC_CODES.keys())
     for part in spec.upper().split(","):
         part = part.strip()
-        if "-" not in part:
-            print(f"Warning: skipping malformed interconnection '{part}' (expected format: GB-FR)", file=sys.stderr)
-            continue
-        # Handle EIC codes that contain hyphens: split on first hyphen only if both parts are short country codes
-        # Use last hyphen if the format looks like an EIC code, first hyphen otherwise
-        # Strategy: try splitting on first '-'
-        left, _, right = part.partition("-")
-        if not right:
-            print(f"Warning: skipping malformed interconnection '{part}'", file=sys.stderr)
-            continue
-        # If right side contains '-', it might be a multi-char code like NO1-SE3 → split was wrong
-        # Re-split: find the pair separator as the hyphen that separates two valid country codes
-        # Simple heuristic: try the first hyphen; if left isn't in EIC_CODES, try the second
-        if left not in EIC_CODES:
-            # Try known codes via prefix matching
-            matched = False
-            for code in EIC_CODES:
-                if part.startswith(code + "-"):
-                    out_c = code
-                    in_c = part[len(code) + 1:]
-                    if in_c in EIC_CODES:
-                        pairs.append((out_c, in_c))
-                        matched = True
-                        break
-            if not matched:
-                print(f"Warning: unknown country code in '{part}'. Known codes: {', '.join(sorted(EIC_CODES))}", file=sys.stderr)
-        else:
-            in_c = right
-            if in_c not in EIC_CODES:
-                print(f"Warning: unknown country code '{in_c}'. Known codes: {', '.join(sorted(EIC_CODES))}", file=sys.stderr)
-            else:
-                pairs.append((left, in_c))
+        # Try splitting at each hyphen to find a valid (out, in) pair
+        matched = False
+        for i in range(1, len(part)):
+            if part[i] == "-":
+                out_c = part[:i]
+                in_c = part[i + 1:]
+                if out_c in known and in_c in known:
+                    pairs.append((out_c, in_c))
+                    matched = True
+                    break
+        if not matched:
+            print(f"Warning: could not parse '{part}'. Known area codes: {', '.join(sorted(known))}", file=sys.stderr)
     return pairs
 
 
 def select_interconnections_interactive() -> list[tuple[str, str]]:
-    print("\nCommon interconnections:")
-    for i, (out_c, in_c) in enumerate(COMMON_INTERCONNECTIONS, 1):
-        print(f"  {i:2}. {out_c}-{in_c}")
-    print()
-    print("Enter interconnections as comma-separated pairs (e.g. GB-FR,FR-DE)")
-    print("or enter numbers from the list above (e.g. 1,3,5)")
-    raw = input("Interconnections: ").strip()
-    if not raw:
-        print("No interconnections specified.", file=sys.stderr)
+    print(f"\nAll known ENTSO-E cross-border interconnections ({len(ALL_INTERCONNECTIONS)} total).")
+    print("You can filter by typing a country/area code prefix (e.g. 'GB', 'NO', 'IT').")
+    print("Or press Enter to see all.\n")
+    filter_str = input("Filter (optional): ").strip().upper()
+
+    filtered = [
+        (o, i) for o, i in ALL_INTERCONNECTIONS
+        if not filter_str or filter_str in o or filter_str in i
+    ]
+
+    if not filtered:
+        print(f"No interconnections match '{filter_str}'.", file=sys.stderr)
         sys.exit(1)
 
-    # Check if user entered numbers
-    parts = [p.strip() for p in raw.split(",")]
-    if all(p.isdigit() for p in parts):
-        result = []
-        for p in parts:
-            idx = int(p) - 1
-            if 0 <= idx < len(COMMON_INTERCONNECTIONS):
-                result.append(COMMON_INTERCONNECTIONS[idx])
+    print()
+    for idx, (out_c, in_c) in enumerate(filtered, 1):
+        out_desc = EIC_CODES[out_c][1] if out_c in EIC_CODES else out_c
+        in_desc = EIC_CODES[in_c][1] if in_c in EIC_CODES else in_c
+        print(f"  {idx:3}. {out_c:<12} → {in_c:<12}  ({out_desc} → {in_desc})")
+
+    print()
+    print("Enter numbers (e.g. 1,3,5) or free-form pairs (e.g. GB-FR,FR-DE), or both:")
+    raw = input("Selection: ").strip()
+    if not raw:
+        print("No interconnections selected.", file=sys.stderr)
+        sys.exit(1)
+
+    result: list[tuple[str, str]] = []
+    for token in raw.split(","):
+        token = token.strip()
+        if token.isdigit():
+            idx = int(token) - 1
+            if 0 <= idx < len(filtered):
+                result.append(filtered[idx])
             else:
-                print(f"Warning: index {p} out of range, skipping.", file=sys.stderr)
-        return result
-    else:
-        return parse_interconnections(raw)
+                print(f"Warning: index {token} out of range, skipping.", file=sys.stderr)
+        else:
+            result.extend(parse_interconnections(token))
+    return result
 
 
 def format_period(dt: date) -> str:
@@ -326,8 +408,8 @@ def main() -> None:
     print(f"Interconnections: {', '.join(f'{o}-{i}' for o, i in interconnections)}\n")
 
     for out_country, in_country in interconnections:
-        out_domain = EIC_CODES[out_country]
-        in_domain = EIC_CODES[in_country]
+        out_domain = EIC_CODES[out_country][0]
+        in_domain = EIC_CODES[in_country][0]
         print(f"  Fetching {out_country} → {in_country} ({out_domain} → {in_domain})...", end=" ", flush=True)
 
         root = fetch_flows(token, out_domain, in_domain, period_start, period_end)
