@@ -37,9 +37,6 @@ def _(mo):
     return
 
 
-# ---------------------------------------------------------------------------
-# Load all cross_border_flows CSV files from data/
-# ---------------------------------------------------------------------------
 @app.cell
 def _(Path, glob, mo, pl):
     _data_dir = Path(__file__).parent.parent / "data"
@@ -68,13 +65,9 @@ def _(Path, glob, mo, pl):
         .sort("datetime_utc")
         .unique(subset=["datetime_utc", "out_country", "in_country"], keep="first")
     )
-
     return (all_flows,)
 
 
-# ---------------------------------------------------------------------------
-# Controls
-# ---------------------------------------------------------------------------
 @app.cell
 def _(all_flows, mo, pl):
     # Build sorted list of available interconnections as "AT → DE_LU" labels
@@ -106,7 +99,7 @@ def _(all_flows, mo, pl):
 
 
 @app.cell
-def _(all_flows, mo, pl):
+def _(all_flows, mo):
     _min_date = all_flows["datetime_utc"].min().date()
     _max_date = all_flows["datetime_utc"].max().date()
 
@@ -121,11 +114,15 @@ def _(all_flows, mo, pl):
     return (date_range_picker,)
 
 
-# ---------------------------------------------------------------------------
-# Filter data for selected interconnection + date range
-# ---------------------------------------------------------------------------
 @app.cell
-def _(aggregation_picker, all_flows, date_range_picker, interconnection_picker, mo, pl):
+def _(
+    aggregation_picker,
+    all_flows,
+    date_range_picker,
+    interconnection_picker,
+    mo,
+    pl,
+):
     _out, _in = interconnection_picker.value.split(" → ")
     _start, _end = date_range_picker.value
 
@@ -155,13 +152,9 @@ def _(aggregation_picker, all_flows, date_range_picker, interconnection_picker, 
             .agg(pl.col("flow_mw").mean().alias("flow_mw"))
             .sort("datetime_utc")
         )
-
     return filtered_flows, plot_df
 
 
-# ---------------------------------------------------------------------------
-# Time-series chart
-# ---------------------------------------------------------------------------
 @app.cell
 def _(go, interconnection_picker, mo, plot_df):
     _fig = go.Figure()
@@ -186,9 +179,6 @@ def _(go, interconnection_picker, mo, plot_df):
     return
 
 
-# ---------------------------------------------------------------------------
-# Net flow (A→B minus B→A) if reverse direction is available
-# ---------------------------------------------------------------------------
 @app.cell
 def _(all_flows, date_range_picker, go, interconnection_picker, mo, pl):
     _out, _in = interconnection_picker.value.split(" → ")
@@ -221,6 +211,7 @@ def _(all_flows, date_range_picker, go, interconnection_picker, mo, pl):
     _net = (
         _fwd.join(_rev, on="datetime_utc", how="inner")
         .with_columns((pl.col("fwd_mw") - pl.col("rev_mw")).alias("net_mw"))
+        .sort("datetime_utc")
         .group_by_dynamic("datetime_utc", every="1d")
         .agg(pl.col("net_mw").mean())
         .sort("datetime_utc")
@@ -245,15 +236,12 @@ def _(all_flows, date_range_picker, go, interconnection_picker, mo, pl):
         height=360,
         margin=dict(l=60, r=20, t=48, b=40),
     )
-    mo.plotly(_fig2)
+    _fig2
     return
 
 
-# ---------------------------------------------------------------------------
-# Monthly summary stats
-# ---------------------------------------------------------------------------
 @app.cell
-def _(date_range_picker, go, interconnection_picker, mo, pl, all_flows):
+def _(all_flows, date_range_picker, go, interconnection_picker, pl):
     _out, _in = interconnection_picker.value.split(" → ")
     _start, _end = date_range_picker.value
 
@@ -310,13 +298,11 @@ def _(date_range_picker, go, interconnection_picker, mo, pl, all_flows):
         height=360,
         margin=dict(l=60, r=20, t=48, b=40),
     )
-    mo.plotly(_fig3)
+
+    _fig3
     return
 
 
-# ---------------------------------------------------------------------------
-# Raw data table (bottom of notebook)
-# ---------------------------------------------------------------------------
 @app.cell
 def _(filtered_flows, mo, pl):
     mo.md("### Raw data"), mo.ui.table(
