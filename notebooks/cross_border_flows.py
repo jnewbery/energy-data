@@ -63,7 +63,7 @@ def _(Path, glob, mo, pl):
     all_flows = (
         pl.concat(_frames, how="diagonal_relaxed")
         .with_columns(
-            pl.col("datetime_utc").str.to_datetime(time_unit="us", use_earliest=True)
+            pl.col("datetime_utc").str.to_datetime(format="%Y-%m-%dT%H:%M:%S%z", time_unit="us")
         )
         .sort("datetime_utc")
         .unique(subset=["datetime_utc", "out_country", "in_country"], keep="first")
