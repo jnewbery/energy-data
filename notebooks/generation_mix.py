@@ -87,7 +87,7 @@ def _():
         "B11": "#64B5F6",  # Hydro Run-of-river and poundage
         "B12": "#1976D2",  # Hydro Water Reservoir
         "B13": "#00695C",  # Marine
-        "B14": "#FDD835",  # Nuclear
+        "B14": "#681470",  # Nuclear
         "B15": "#A5D6A7",  # Other renewable
         "B16": "#FFD600",  # Solar
         "B17": "#9E9E9E",  # Waste
@@ -120,7 +120,7 @@ def _(all_gen, mo):
 
 
 @app.cell
-def _(all_gen, country_picker, mo):
+def _(all_gen, country_picker, mo, pl):
     _country_data = all_gen.filter(pl.col("area") == country_picker.value)
     _min_date = _country_data["datetime_utc"].min().date()
     _max_date = _country_data["datetime_utc"].max().date()
@@ -169,7 +169,7 @@ def _(aggregation_picker, all_gen, country_picker, date_range_picker, mo, pl):
 
 
 @app.cell
-def _(PSR_COLORS, agg_gen, country_picker, go, mo, pl):
+def _(PSR_COLORS: dict[str, str], agg_gen, country_picker, go, pl):
     # Only show fuel types with any non-zero generation
     _active_types = (
         agg_gen
@@ -204,12 +204,19 @@ def _(PSR_COLORS, agg_gen, country_picker, go, mo, pl):
         legend=dict(orientation="v", x=1.01, y=1),
         margin=dict(l=60, r=180, t=48, b=40),
     )
-    mo.plotly(_fig)
+    _fig
     return
 
 
 @app.cell
-def _(PSR_COLORS, agg_gen, country_picker, date_range_picker, go, mo, pl):
+def _(
+    PSR_COLORS: dict[str, str],
+    agg_gen,
+    country_picker,
+    date_range_picker,
+    go,
+    pl,
+):
     _start, _end = date_range_picker.value
 
     _summary = (
@@ -241,7 +248,7 @@ def _(PSR_COLORS, agg_gen, country_picker, date_range_picker, go, mo, pl):
         height=max(300, 40 * len(_summary)),
         margin=dict(l=220, r=80, t=48, b=40),
     )
-    mo.plotly(_fig2)
+    _fig2
     return
 
 

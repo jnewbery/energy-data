@@ -137,7 +137,7 @@ def _(aggregation_picker, all_load, country_picker, date_range_picker, mo, pl):
 
 
 @app.cell
-def _(go, mo, plot_load, pl):
+def _(go, mo, pl, plot_load):
     _COUNTRY_COLORS = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b"]
 
     _fig = go.Figure()
@@ -166,7 +166,7 @@ def _(go, mo, plot_load, pl):
 
 
 @app.cell
-def _(date_range_picker, filtered_load, go, mo, pl):
+def _(date_range_picker, filtered_load, go, pl):
     _start, _end = date_range_picker.value
 
     # Monthly average load per country
@@ -202,12 +202,12 @@ def _(date_range_picker, filtered_load, go, mo, pl):
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
         margin=dict(l=60, r=20, t=64, b=40),
     )
-    mo.plotly(_fig2)
+    _fig2
     return
 
 
 @app.cell
-def _(filtered_load, go, mo, pl):
+def _(filtered_load, go, pl):
     # Hour-of-day profile: average load by hour across all selected data
     _hourly_profile = (
         filtered_load
@@ -241,7 +241,7 @@ def _(filtered_load, go, mo, pl):
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
         margin=dict(l=60, r=20, t=64, b=40),
     )
-    mo.plotly(_fig3)
+    _fig3
     return
 
 
