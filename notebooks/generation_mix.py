@@ -104,7 +104,32 @@ def _():
         "Other":                            "#BDBDBD",
         "Energy storage":                   "#0288D1",
     }
-    return (PSR_COLORS,)
+
+    # Stacking order: firm/baseload at bottom → variable at top → storage on top
+    PSR_STACK_ORDER: list[str] = [
+        "Nuclear",
+        "Geothermal",
+        "Biomass",
+        "Hydro Run-of-river and poundage",
+        "Hydro Water Reservoir",
+        "Marine",
+        "Fossil Brown coal/Lignite",
+        "Fossil Hard coal",
+        "Fossil Coal-derived gas",
+        "Fossil Peat",
+        "Fossil Oil shale",
+        "Fossil Oil",
+        "Fossil Gas",
+        "Waste",
+        "Other renewable",
+        "Other",
+        "Wind Offshore",
+        "Wind Onshore",
+        "Solar",
+        "Hydro Pumped Storage",
+        "Energy storage",
+    ]
+    return PSR_COLORS, PSR_STACK_ORDER
 
 
 @app.cell
@@ -174,18 +199,24 @@ def _(aggregation_picker, all_gen, country_picker, date_range_picker, mo, pl):
 
 
 @app.cell
-def _(PSR_COLORS: dict[str, str], agg_gen, country_picker, go, pl):
+def _(PSR_COLORS: dict[str, str], PSR_STACK_ORDER: list[str], agg_gen, country_picker, go, pl):
     # Only show fuel types with any non-zero generation
     _active_types = (
         agg_gen
         .group_by("psr_type_name")
         .agg(pl.col("quantity_mw").sum())
         .filter(pl.col("quantity_mw") > 0)
-        .sort("psr_type_name")
+    )
+
+    # Sort by stacking order (firm at bottom, variable at top)
+    _order_map = {name: i for i, name in enumerate(PSR_STACK_ORDER)}
+    _sorted_names = sorted(
+        _active_types["psr_type_name"].to_list(),
+        key=lambda n: _order_map.get(n, len(PSR_STACK_ORDER)),
     )
 
     _fig = go.Figure()
-    for _name in _active_types["psr_type_name"].to_list():
+    for _name in _sorted_names:
         _ts = agg_gen.filter(pl.col("psr_type_name") == _name).sort("datetime_utc")
         _fig.add_trace(go.Scatter(
             x=_ts["datetime_utc"].to_list(),
