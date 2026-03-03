@@ -241,60 +241,83 @@ def _(all_flows, date_range_picker, go, interconnection_picker, mo, pl):
 
 
 @app.cell
-def _(all_flows, date_range_picker, go, interconnection_picker, pl):
+def _(all_flows, date_range_picker, go, interconnection_picker, mo, pl):
     _out, _in = interconnection_picker.value.split(" → ")
     _start, _end = date_range_picker.value
 
-    _monthly = (
+    _date_filter = (
+        (pl.col("datetime_utc").dt.date() >= _start) &
+        (pl.col("datetime_utc").dt.date() <= _end)
+    )
+
+    _fwd_monthly = (
         all_flows
         .filter(
             (pl.col("out_country") == _out) & (pl.col("in_country") == _in) &
-            (pl.col("datetime_utc").dt.date() >= _start) &
-            (pl.col("datetime_utc").dt.date() <= _end)
+            _date_filter
         )
         .sort("datetime_utc")
         .group_by_dynamic("datetime_utc", every="1mo")
-        .agg(
-            pl.col("flow_mw").mean().alias("mean_mw"),
-            pl.col("flow_mw").max().alias("max_mw"),
-            pl.col("flow_mw").min().alias("min_mw"),
+        .agg(pl.col("flow_mw").mean().alias("fwd_mw"))
+    )
+
+    _rev_monthly = (
+        all_flows
+        .filter(
+            (pl.col("out_country") == _in) & (pl.col("in_country") == _out) &
+            _date_filter
         )
+        .sort("datetime_utc")
+        .group_by_dynamic("datetime_utc", every="1mo")
+        .agg(pl.col("flow_mw").mean().alias("rev_mw"))
+    )
+
+    mo.stop(
+        _rev_monthly.is_empty(),
+        mo.md(f"Reverse direction **{_in} → {_out}** not available — skipping monthly summary."),
+    )
+
+    _monthly = (
+        _fwd_monthly.join(_rev_monthly, on="datetime_utc", how="inner")
+        .with_columns((pl.col("fwd_mw") - pl.col("rev_mw")).alias("net_mw"))
         .sort("datetime_utc")
     )
 
     _fig3 = go.Figure()
     _fig3.add_trace(go.Scatter(
         x=_monthly["datetime_utc"].to_list(),
-        y=_monthly["max_mw"].to_list(),
-        mode="lines",
-        line=dict(width=0),
-        showlegend=False,
-        hoverinfo="skip",
-    ))
-    _fig3.add_trace(go.Scatter(
-        x=_monthly["datetime_utc"].to_list(),
-        y=_monthly["min_mw"].to_list(),
-        mode="lines",
-        fill="tonexty",
-        fillcolor="rgba(70,130,180,0.2)",
-        line=dict(width=0),
-        name="Min–Max range",
-        hovertemplate="%{x|%Y-%m}<br>Min: %{y:,.0f} MW<extra></extra>",
-    ))
-    _fig3.add_trace(go.Scatter(
-        x=_monthly["datetime_utc"].to_list(),
-        y=_monthly["mean_mw"].to_list(),
+        y=_monthly["fwd_mw"].to_list(),
         mode="lines+markers",
         line=dict(color="steelblue", width=2),
         marker=dict(size=5),
-        name="Monthly mean",
-        hovertemplate="%{x|%Y-%m}<br>Mean: %{y:,.0f} MW<extra></extra>",
+        name=f"{_out} → {_in}",
+        hovertemplate="%{x|%Y-%m}<br>%{y:,.0f} MW<extra></extra>",
+    ))
+    _fig3.add_trace(go.Scatter(
+        x=_monthly["datetime_utc"].to_list(),
+        y=_monthly["rev_mw"].to_list(),
+        mode="lines+markers",
+        line=dict(color="tomato", width=2),
+        marker=dict(size=5),
+        name=f"{_in} → {_out}",
+        hovertemplate="%{x|%Y-%m}<br>%{y:,.0f} MW<extra></extra>",
+    ))
+    _fig3.add_trace(go.Bar(
+        x=_monthly["datetime_utc"].to_list(),
+        y=_monthly["net_mw"].to_list(),
+        marker_color=[
+            "rgba(70,130,180,0.3)" if v >= 0 else "rgba(255,99,71,0.3)"
+            for v in _monthly["net_mw"].to_list()
+        ],
+        name="Net",
+        hovertemplate="%{x|%Y-%m}<br>Net: %{y:,.0f} MW<extra></extra>",
     ))
     _fig3.update_layout(
-        title=f"Monthly Summary: {interconnection_picker.value}",
+        title=f"Monthly Average Flow: {_out} ↔ {_in}",
         xaxis_title=None,
         yaxis_title="Flow (MW)",
         hovermode="x unified",
+        barmode="overlay",
         height=360,
         margin=dict(l=60, r=20, t=48, b=40),
     )
