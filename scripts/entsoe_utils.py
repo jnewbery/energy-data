@@ -1,0 +1,270 @@
+"""Shared utilities for ENTSO-E Transparency Platform API scripts.
+
+Provides EIC area codes, interconnection topology, PSR fuel type names,
+authentication helpers, date batching, and a generic API fetch function
+with retry logic.
+"""
+
+import os
+import sys
+import time
+import xml.etree.ElementTree as ET
+from datetime import date, timedelta
+
+import requests
+
+BASE_URL = "https://web-api.tp.entsoe.eu/api"
+
+# EIC area codes sourced from the ENTSO-E Transparency Platform API documentation
+# and the entsoe-py open-source library (https://github.com/EnergieID/entsoe-py).
+# Each entry: short name -> (EIC code, human-readable description)
+# Note: DE_AT_LU (pre-Oct 2018) and DE_LU (post-Oct 2018) are separate historical BZs.
+EIC_CODES: dict[str, tuple[str, str]] = {
+    "AL":        ("10YAL-KESH-----5", "Albania"),
+    "AT":        ("10YAT-APG------L", "Austria"),
+    "BA":        ("10YBA-JPCC-----D", "Bosnia Herzegovina"),
+    "BE":        ("10YBE----------2", "Belgium"),
+    "BG":        ("10YCA-BULGARIA-R", "Bulgaria"),
+    "BY":        ("10Y1001A1001A51S", "Belarus"),
+    "CH":        ("10YCH-SWISSGRIDZ", "Switzerland"),
+    "CZ":        ("10YCZ-CEPS-----N", "Czech Republic"),
+    "DE_AT_LU":  ("10Y1001A1001A63L", "DE-AT-LU BZ (pre-Oct 2018)"),
+    "DE_LU":     ("10Y1001A1001A82H", "Germany-Luxembourg (post-Oct 2018)"),
+    "DK_1":      ("10YDK-1--------W", "Denmark DK1"),
+    "DK_2":      ("10YDK-2--------M", "Denmark DK2"),
+    "EE":        ("10Y1001A1001A39I", "Estonia"),
+    "ES":        ("10YES-REE------0", "Spain"),
+    "FI":        ("10YFI-1--------U", "Finland"),
+    "FR":        ("10YFR-RTE------C", "France"),
+    "GB":        ("10YGB----------A", "Great Britain"),
+    "GR":        ("10YGR-HTSO-----Y", "Greece"),
+    "HR":        ("10YHR-HEP------M", "Croatia"),
+    "HU":        ("10YHU-MAVIR----U", "Hungary"),
+    "IE":        ("10YIE-1001A00010", "Ireland (EirGrid CA)"),
+    "IE_SEM":    ("10Y1001A1001A59C", "Ireland SEM BZ"),
+    "IT_BRNN":   ("10Y1001A1001A699", "Italy-Brindisi"),
+    "IT_CALA":   ("10Y1001C--00096J", "Italy-Calabria"),
+    "IT_CNOR":   ("10Y1001A1001A70O", "Italy-Centre-North"),
+    "IT_CSUD":   ("10Y1001A1001A71M", "Italy-Centre-South"),
+    "IT_FOGN":   ("10Y1001A1001A72K", "Italy-Foggia"),
+    "IT_GR":     ("10Y1001A1001A66F", "Italy-Greece BZ"),
+    "IT_NORD":   ("10Y1001A1001A73I", "Italy-North"),
+    "IT_NORD_AT":("10Y1001A1001A80L", "Italy-North-AT BZ"),
+    "IT_NORD_CH":("10Y1001A1001A68B", "Italy-North-CH BZ"),
+    "IT_NORD_FR":("10Y1001A1001A81J", "Italy-North-FR BZ"),
+    "IT_ROSN":   ("10Y1001A1001A77A", "Italy-Rossano"),
+    "IT_SARD":   ("10Y1001A1001A74G", "Italy-Sardinia"),
+    "IT_SICI":   ("10Y1001A1001A75E", "Italy-Sicily"),
+    "IT_SUD":    ("10Y1001A1001A788", "Italy-South"),
+    "LT":        ("10YLT-1001A0008Q", "Lithuania"),
+    "LV":        ("10YLV-1001A00074", "Latvia"),
+    "ME":        ("10YCS-CG-TSO---S", "Montenegro"),
+    "MK":        ("10YMK-MEPSO----8", "North Macedonia"),
+    "MT":        ("10Y1001A1001A93C", "Malta"),
+    "NIE":       ("10Y1001A1001A016", "Northern Ireland"),
+    "NL":        ("10YNL----------L", "Netherlands"),
+    "NO_1":      ("10YNO-1--------2", "Norway NO1"),
+    "NO_2":      ("10YNO-2--------T", "Norway NO2"),
+    "NO_3":      ("10YNO-3--------J", "Norway NO3"),
+    "NO_4":      ("10YNO-4--------9", "Norway NO4"),
+    "NO_5":      ("10Y1001A1001A48H", "Norway NO5"),
+    "PL":        ("10YPL-AREA-----S", "Poland"),
+    "PT":        ("10YPT-REN------W", "Portugal"),
+    "RO":        ("10YRO-TEL------P", "Romania"),
+    "RS":        ("10YCS-SERBIATSOV", "Serbia"),
+    "RU":        ("10Y1001A1001A49F", "Russia"),
+    "RU_KGD":    ("10Y1001A1001A50U", "Russia-Kaliningrad"),
+    "SE_1":      ("10Y1001A1001A44P", "Sweden SE1"),
+    "SE_2":      ("10Y1001A1001A45N", "Sweden SE2"),
+    "SE_3":      ("10Y1001A1001A46L", "Sweden SE3"),
+    "SE_4":      ("10Y1001A1001A47J", "Sweden SE4"),
+    "SI":        ("10YSI-ELES-----O", "Slovenia"),
+    "SK":        ("10YSK-SEPS-----K", "Slovakia"),
+    "TR":        ("10YTR-TEIAS----W", "Turkey"),
+    "UA":        ("10Y1001C--00003F", "Ukraine"),
+    "XK":        ("10Y1001C--00100H", "Kosovo"),
+}
+
+# Comprehensive list of known physical interconnections, sourced from the
+# ENTSO-E Transparency Platform documentation and the entsoe-py library
+# NEIGHBOURS mapping (https://github.com/EnergieID/entsoe-py).
+_NEIGHBOURS: dict[str, list[str]] = {
+    "AL":       ["ME", "MK", "GR", "RS"],
+    "AT":       ["CH", "CZ", "DE_LU", "HU", "IT_NORD", "SI"],
+    "BA":       ["HR", "ME", "RS"],
+    "BE":       ["NL", "DE_AT_LU", "FR", "GB", "DE_LU"],
+    "BG":       ["GR", "MK", "RO", "RS", "TR"],
+    "BY":       ["LT", "LV", "UA"],
+    "CH":       ["AT", "DE_AT_LU", "DE_LU", "FR", "IT_NORD", "IT_NORD_CH"],
+    "CZ":       ["AT", "DE_AT_LU", "DE_LU", "PL", "SK"],
+    "DE_AT_LU": ["BE", "CH", "CZ", "DK_1", "DK_2", "FR", "IT_NORD", "IT_NORD_AT", "NL", "PL", "SE_4", "SI"],
+    "DE_LU":    ["AT", "BE", "CH", "CZ", "DK_1", "DK_2", "FR", "NO_2", "NL", "PL", "SE_4"],
+    "DK_1":     ["DE_AT_LU", "DE_LU", "DK_2", "NO_2", "SE_3", "NL", "GB"],
+    "DK_2":     ["DE_AT_LU", "DE_LU", "DK_1", "SE_4"],
+    "EE":       ["FI", "LV", "RU"],
+    "ES":       ["FR", "PT"],
+    "FI":       ["EE", "NO_4", "RU", "SE_1", "SE_3"],
+    "FR":       ["BE", "CH", "DE_AT_LU", "DE_LU", "ES", "GB", "IT_NORD", "IT_NORD_FR"],
+    "GB":       ["BE", "FR", "IE_SEM", "NL", "NO_2", "DK_1"],
+    "GR":       ["AL", "BG", "IT_BRNN", "IT_GR", "MK", "TR"],
+    "HR":       ["BA", "HU", "RS", "SI"],
+    "HU":       ["AT", "HR", "RO", "RS", "SI", "SK", "UA"],
+    "IE":       ["GB", "NIE"],
+    "IE_SEM":   ["GB"],
+    "IT_BRNN":  ["GR", "IT_SUD"],
+    "IT_CALA":  ["IT_SICI", "IT_SUD"],
+    "IT_CNOR":  ["IT_NORD", "IT_CSUD", "IT_SARD"],
+    "IT_CSUD":  ["IT_CNOR", "IT_SARD", "IT_SUD"],
+    "IT_FOGN":  ["IT_SUD"],
+    "IT_NORD":  ["CH", "DE_AT_LU", "FR", "SI", "AT", "IT_CNOR"],
+    "IT_ROSN":  ["IT_SICI", "IT_SUD"],
+    "IT_SARD":  ["IT_CNOR", "IT_CSUD"],
+    "IT_SICI":  ["IT_CALA", "IT_ROSN", "MT"],
+    "IT_SUD":   ["IT_BRNN", "IT_CSUD", "IT_FOGN", "IT_ROSN", "IT_CALA"],
+    "LT":       ["BY", "LV", "PL", "RU_KGD", "SE_4"],
+    "LV":       ["EE", "LT", "RU"],
+    "ME":       ["AL", "BA", "RS"],
+    "MK":       ["BG", "GR", "RS"],
+    "MT":       ["IT_SICI"],
+    "NIE":      ["GB", "IE"],
+    "NL":       ["BE", "DE_AT_LU", "DE_LU", "GB", "NO_2", "DK_1"],
+    "NO_1":     ["NO_2", "NO_3", "NO_5", "SE_3"],
+    "NO_2":     ["DE_LU", "DK_1", "NL", "NO_1", "NO_5", "GB"],
+    "NO_3":     ["NO_1", "NO_4", "NO_5", "SE_2"],
+    "NO_4":     ["SE_2", "FI", "NO_3", "SE_1"],
+    "NO_5":     ["NO_1", "NO_2", "NO_3"],
+    "PL":       ["CZ", "DE_AT_LU", "DE_LU", "LT", "SE_4", "SK", "UA"],
+    "PT":       ["ES"],
+    "RO":       ["BG", "HU", "RS", "UA"],
+    "RS":       ["AL", "BA", "BG", "HR", "HU", "ME", "MK", "RO"],
+    "SE_1":     ["FI", "NO_4", "SE_2"],
+    "SE_2":     ["NO_3", "NO_4", "SE_1", "SE_3"],
+    "SE_3":     ["DK_1", "FI", "NO_1", "SE_2", "SE_4"],
+    "SE_4":     ["DE_AT_LU", "DE_LU", "DK_2", "LT", "PL", "SE_3"],
+    "SI":       ["AT", "DE_AT_LU", "HR", "IT_NORD", "HU"],
+    "SK":       ["CZ", "HU", "PL", "UA"],
+    "TR":       ["BG", "GR"],
+    "UA":       ["BY", "HU", "PL", "RO", "SK"],
+}
+
+_seen: set[tuple[str, str]] = set()
+ALL_INTERCONNECTIONS: list[tuple[str, str]] = []
+for _out, _ins in sorted(_NEIGHBOURS.items()):
+    for _in in _ins:
+        _pair = tuple(sorted([_out, _in]))
+        if _pair not in _seen:
+            _seen.add(_pair)
+            ALL_INTERCONNECTIONS.append((_out, _in))
+
+# ENTSO-E production type codes (psrType) mapped to human-readable names.
+PSR_TYPE_NAMES: dict[str, str] = {
+    "B01": "Biomass",
+    "B02": "Fossil Brown coal/Lignite",
+    "B03": "Fossil Coal-derived gas",
+    "B04": "Fossil Gas",
+    "B05": "Fossil Hard coal",
+    "B06": "Fossil Oil",
+    "B07": "Fossil Oil shale",
+    "B08": "Fossil Peat",
+    "B09": "Geothermal",
+    "B10": "Hydro Pumped Storage",
+    "B11": "Hydro Run-of-river and poundage",
+    "B12": "Hydro Water Reservoir",
+    "B13": "Marine",
+    "B14": "Nuclear",
+    "B15": "Other renewable",
+    "B16": "Solar",
+    "B17": "Waste",
+    "B18": "Wind Offshore",
+    "B19": "Wind Onshore",
+    "B20": "Other",
+    "B25": "Energy storage",
+}
+
+
+def get_token(args_token: str | None) -> str:
+    token = args_token or os.environ.get("ENTSOE_TOKEN") or os.environ.get("ENTSOE_SECURITY_TOKEN")
+    if not token:
+        print("No ENTSO-E security token found.")
+        print("Set ENTSOE_TOKEN environment variable, or pass --token.")
+        token = input("Enter your ENTSO-E security token: ").strip()
+    if not token:
+        print("Error: a security token is required.", file=sys.stderr)
+        sys.exit(1)
+    return token
+
+
+def yearly_batches(start: date, end: date) -> list[tuple[date, date]]:
+    """Split a date range into ≤1-year batches (API hard limit is P1Y)."""
+    batches = []
+    batch_start = start
+    while batch_start <= end:
+        batch_end = min(date(batch_start.year + 1, batch_start.month, batch_start.day) - timedelta(days=1), end)
+        batches.append((batch_start, batch_end))
+        batch_start = batch_end + timedelta(days=1)
+    return batches
+
+
+def format_period(dt: date) -> str:
+    """Format a date as YYYYMMDD0000 for the ENTSO-E API (midnight UTC)."""
+    return dt.strftime("%Y%m%d0000")
+
+
+def resolution_to_minutes(resolution: str) -> int:
+    """Convert ISO 8601 duration like PT15M, PT30M, PT60M, P1Y to minutes."""
+    resolution = resolution.strip()
+    if resolution.startswith("PT") and resolution.endswith("M"):
+        return int(resolution[2:-1])
+    if resolution.startswith("PT") and resolution.endswith("H"):
+        return int(resolution[2:-1]) * 60
+    if resolution == "P1Y":
+        return 525600
+    return 60
+
+
+def fetch_api(
+    token: str,
+    extra_params: dict,
+    retries: int = 3,
+    timeout: int = 120,
+) -> ET.Element | None:
+    """Make a GET request to the ENTSO-E API with retry/backoff. Returns parsed XML root or None."""
+    params = {**extra_params, "securityToken": token}
+    for attempt in range(1, retries + 1):
+        try:
+            resp = requests.get(BASE_URL, params=params, timeout=timeout)
+        except requests.exceptions.Timeout:
+            if attempt < retries:
+                wait = 2 ** attempt
+                print(f"timeout (attempt {attempt}/{retries}), retrying in {wait}s...", end=" ", flush=True)
+                time.sleep(wait)
+                continue
+            print(f"timeout after {retries} attempts", file=sys.stderr)
+            return None
+        except requests.exceptions.RequestException as e:
+            if attempt < retries:
+                wait = 2 ** attempt
+                print(f"error ({e}) (attempt {attempt}/{retries}), retrying in {wait}s...", end=" ", flush=True)
+                time.sleep(wait)
+                continue
+            print(f"request failed: {e}", file=sys.stderr)
+            return None
+
+        if resp.status_code != 200:
+            print(f"  HTTP {resp.status_code}: {resp.text[:200]}", file=sys.stderr)
+            return None
+
+        root = ET.fromstring(resp.text)
+        ns_match = root.tag.rstrip(">").split("{")
+        if len(ns_match) > 1 and "Acknowledgement" in root.tag:
+            ns = "{" + ns_match[1] + "}"
+            reason = root.find(f".//{ns}Reason")
+            if reason is not None:
+                code_el = reason.find(f"{ns}code")
+                text_el = reason.find(f"{ns}text")
+                code = code_el.text if code_el is not None else "?"
+                text = text_el.text if text_el is not None else "?"
+                print(f"  API error [{code}]: {text}", file=sys.stderr)
+            return None
+        return root
+    return None
