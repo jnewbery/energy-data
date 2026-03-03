@@ -133,8 +133,19 @@ def save_csv(rows: list[dict], area: str, start: date, end: date) -> str:
     output_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
     os.makedirs(output_dir, exist_ok=True)
     filepath = os.path.join(output_dir, filename)
-    df = pl.DataFrame(rows)
-    df = df.sort(["datetime_utc", "psr_type"])
+    df = (
+        pl.DataFrame(rows)
+        # Sum across multiple TimeSeries with the same (datetime, area, psr_type)
+        .group_by(["datetime_utc", "area", "psr_type_name", "resolution"])
+        .agg(pl.col("quantity_mw").sum())
+        .pivot(
+            on="psr_type_name",
+            index=["datetime_utc", "area", "resolution"],
+            values="quantity_mw",
+            aggregate_function="sum",
+        )
+        .sort("datetime_utc")
+    )
     df.write_csv(filepath)
     return filepath
 

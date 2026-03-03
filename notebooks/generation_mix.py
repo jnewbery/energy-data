@@ -56,45 +56,53 @@ def _(Path, glob, mo, pl):
         except Exception:
             pass
 
+    _META_COLS = {"datetime_utc", "area", "resolution"}
+
+    _wide = pl.concat(_frames, how="diagonal_relaxed")
+    _fuel_cols = [c for c in _wide.columns if c not in _META_COLS]
+
     all_gen = (
-        pl.concat(_frames, how="diagonal_relaxed")
+        _wide
+        .unpivot(
+            on=_fuel_cols,
+            index=["datetime_utc", "area", "resolution"],
+            variable_name="psr_type_name",
+            value_name="quantity_mw",
+        )
         .with_columns(
             pl.col("datetime_utc").str.to_datetime(format="%Y-%m-%dT%H:%M:%S%z", time_unit="us")
         )
-        # Multiple TimeSeries per (datetime, area, psr_type) are possible (e.g. individual units).
-        # Sum them to get total generation per fuel type per interval.
-        .group_by(["datetime_utc", "area", "psr_type", "psr_type_name", "resolution"])
-        .agg(pl.col("quantity_mw").sum())
-        .sort(["area", "datetime_utc", "psr_type"])
+        .filter(pl.col("quantity_mw").is_not_null())
+        .sort(["area", "datetime_utc", "psr_type_name"])
     )
     return (all_gen,)
 
 
 @app.cell
 def _():
-    # Consistent colours per ENTSO-E psrType code
+    # Consistent colours per ENTSO-E fuel type name
     PSR_COLORS: dict[str, str] = {
-        "B01": "#6D4C41",  # Biomass
-        "B02": "#212121",  # Fossil Brown coal/Lignite
-        "B03": "#78909C",  # Fossil Coal-derived gas
-        "B04": "#FF7043",  # Fossil Gas
-        "B05": "#424242",  # Fossil Hard coal
-        "B06": "#8D6E63",  # Fossil Oil
-        "B07": "#A1887F",  # Fossil Oil shale
-        "B08": "#4E342E",  # Fossil Peat
-        "B09": "#F57F17",  # Geothermal
-        "B10": "#1565C0",  # Hydro Pumped Storage
-        "B11": "#64B5F6",  # Hydro Run-of-river and poundage
-        "B12": "#1976D2",  # Hydro Water Reservoir
-        "B13": "#00695C",  # Marine
-        "B14": "#681470",  # Nuclear
-        "B15": "#A5D6A7",  # Other renewable
-        "B16": "#FFD600",  # Solar
-        "B17": "#9E9E9E",  # Waste
-        "B18": "#1B5E20",  # Wind Offshore
-        "B19": "#43A047",  # Wind Onshore
-        "B20": "#BDBDBD",  # Other
-        "B25": "#0288D1",  # Energy storage
+        "Biomass":                          "#6D4C41",
+        "Fossil Brown coal/Lignite":        "#212121",
+        "Fossil Coal-derived gas":          "#78909C",
+        "Fossil Gas":                       "#FF7043",
+        "Fossil Hard coal":                 "#424242",
+        "Fossil Oil":                       "#8D6E63",
+        "Fossil Oil shale":                 "#A1887F",
+        "Fossil Peat":                      "#4E342E",
+        "Geothermal":                       "#F57F17",
+        "Hydro Pumped Storage":             "#1565C0",
+        "Hydro Run-of-river and poundage":  "#64B5F6",
+        "Hydro Water Reservoir":            "#1976D2",
+        "Marine":                           "#00695C",
+        "Nuclear":                          "#681470",
+        "Other renewable":                  "#A5D6A7",
+        "Solar":                            "#FFD600",
+        "Waste":                            "#9E9E9E",
+        "Wind Offshore":                    "#1B5E20",
+        "Wind Onshore":                     "#43A047",
+        "Other":                            "#BDBDBD",
+        "Energy storage":                   "#0288D1",
     }
     return (PSR_COLORS,)
 
@@ -158,12 +166,9 @@ def _(aggregation_picker, all_gen, country_picker, date_range_picker, mo, pl):
     agg_gen = (
         filtered_gen
         .sort("datetime_utc")
-        .group_by_dynamic("datetime_utc", every=_agg, group_by="psr_type")
-        .agg(
-            pl.col("quantity_mw").mean(),
-            pl.col("psr_type_name").first(),
-        )
-        .sort(["psr_type", "datetime_utc"])
+        .group_by_dynamic("datetime_utc", every=_agg, group_by="psr_type_name")
+        .agg(pl.col("quantity_mw").mean())
+        .sort(["psr_type_name", "datetime_utc"])
     )
     return agg_gen, filtered_gen
 
@@ -173,24 +178,22 @@ def _(PSR_COLORS: dict[str, str], agg_gen, country_picker, go, pl):
     # Only show fuel types with any non-zero generation
     _active_types = (
         agg_gen
-        .group_by(["psr_type", "psr_type_name"])
+        .group_by("psr_type_name")
         .agg(pl.col("quantity_mw").sum())
         .filter(pl.col("quantity_mw") > 0)
-        .sort("psr_type")
+        .sort("psr_type_name")
     )
 
     _fig = go.Figure()
-    for _row in _active_types.iter_rows(named=True):
-        _code = _row["psr_type"]
-        _name = _row["psr_type_name"]
-        _ts = agg_gen.filter(pl.col("psr_type") == _code).sort("datetime_utc")
+    for _name in _active_types["psr_type_name"].to_list():
+        _ts = agg_gen.filter(pl.col("psr_type_name") == _name).sort("datetime_utc")
         _fig.add_trace(go.Scatter(
             x=_ts["datetime_utc"].to_list(),
             y=_ts["quantity_mw"].to_list(),
             name=_name,
             mode="lines",
-            line=dict(width=0.5, color=PSR_COLORS.get(_code, "#999")),
-            fillcolor=PSR_COLORS.get(_code, "#999"),
+            line=dict(width=0.5, color=PSR_COLORS.get(_name, "#999")),
+            fillcolor=PSR_COLORS.get(_name, "#999"),
             stackgroup="one",
             hovertemplate=f"<b>{_name}</b><br>%{{x|%Y-%m-%d}}<br>%{{y:,.0f}} MW<extra></extra>",
         ))
@@ -221,7 +224,7 @@ def _(
 
     _summary = (
         agg_gen
-        .group_by(["psr_type", "psr_type_name"])
+        .group_by("psr_type_name")
         .agg(pl.col("quantity_mw").mean().alias("avg_mw"))
         .filter(pl.col("avg_mw") > 0)
         .sort("avg_mw", descending=True)
@@ -234,9 +237,9 @@ def _(
 
     _fig2 = go.Figure(go.Bar(
         x=_summary["avg_mw"].to_list(),
-        y=[f"{n} ({c})" for n, c in zip(_summary["psr_type_name"].to_list(), _summary["psr_type"].to_list())],
+        y=_summary["psr_type_name"].to_list(),
         orientation="h",
-        marker_color=[PSR_COLORS.get(c, "#999") for c in _summary["psr_type"].to_list()],
+        marker_color=[PSR_COLORS.get(n, "#999") for n in _summary["psr_type_name"].to_list()],
         text=[f"{v:.1f}%" for v in _summary["share_pct"].to_list()],
         textposition="outside",
         hovertemplate="<b>%{y}</b><br>Avg: %{x:,.0f} MW<extra></extra>",
@@ -257,8 +260,8 @@ def _(filtered_gen, mo, pl):
     mo.md("### Raw data"), mo.ui.table(
         filtered_gen
         .with_columns(pl.col("datetime_utc").dt.strftime("%Y-%m-%d %H:%M %Z"))
-        .select(["datetime_utc", "area", "psr_type", "psr_type_name", "quantity_mw", "resolution"])
-        .sort(["datetime_utc", "psr_type"]),
+        .select(["datetime_utc", "area", "psr_type_name", "quantity_mw", "resolution"])
+        .sort(["datetime_utc", "psr_type_name"]),
         page_size=20,
     )
     return
