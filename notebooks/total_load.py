@@ -137,7 +137,7 @@ def _(aggregation_picker, all_load, country_picker, date_range_picker, mo, pl):
 
 
 @app.cell
-def _(go, mo, pl, plot_load):
+def _(go, pl, plot_load):
     _COUNTRY_COLORS = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b"]
 
     _fig = go.Figure()
@@ -161,7 +161,7 @@ def _(go, mo, pl, plot_load):
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
         margin=dict(l=60, r=20, t=64, b=40),
     )
-    mo.plotly(_fig)
+    _fig
     return
 
 
