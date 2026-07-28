@@ -11,6 +11,8 @@ app = (
     .build()
 )
 
+PORT = 8017
+
 if __name__ == "__main__":
-    webbrowser.open("http://localhost:8000")
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    webbrowser.open(f"http://localhost:{PORT}")
+    uvicorn.run(app, host="0.0.0.0", port=PORT)
